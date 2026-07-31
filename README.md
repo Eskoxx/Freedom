@@ -4,6 +4,8 @@
 
 Freedom also runs on **Android** — the Freedom app has a dedicated Android build with a native APK. See the [Freedom Android](https://github.com/Eskoxx/Freedom-Android) repo.
 
+![Freedom terminal](freedom-terminal.png)
+
 ## Contents
 
 - [For Users](#for-users)
