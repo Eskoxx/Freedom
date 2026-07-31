@@ -181,6 +181,10 @@ Pull the latest code and reinstall if needed. Python dependencies are pinned in 
 
 See [`AI_PLUGIN_DEV.md`](AI_PLUGIN_DEV.md) — it covers the plugin contract, site exploration, config-driven code generation, proxy-based providers, performance optimization, and development workflow. Additional documentation in [`SPEEDRACE_API.md`](SPEEDRACE_API.md) (Fmovies SpeedRace decryption) and [`extraction-method.md`](extraction-method.md) (Anikoto PNG proxy pipeline).
 
+### Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for ground rules and guidelines, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for expectations around interaction.
+
 ### Quick plugin commands
 
 ```bash
