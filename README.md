@@ -29,12 +29,48 @@ Freedom also runs on **Android** — the Freedom app has a dedicated Android bui
 ### Getting Started
 
 1. **Clone or download** the repository.
-2. **Install system dependencies:**
 
+   ```bash
+   git clone https://github.com/Eskoxx/Freedom.git
+   cd Freedom
+   ```
+
+2. **Install system dependencies** for your platform:
+
+   **Debian / Ubuntu:**
    ```bash
    sudo apt install mpv yt-dlp ffmpeg
    npm install -g webtorrent-cli
    ```
+
+   **Arch Linux / Manjaro:**
+   ```bash
+   sudo pacman -S mpv yt-dlp ffmpeg
+   npm install -g webtorrent-cli
+   ```
+
+   **Fedora:**
+   ```bash
+   sudo dnf install mpv yt-dlp ffmpeg
+   npm install -g webtorrent-cli
+   ```
+
+   **openSUSE:**
+   ```bash
+   sudo zypper install mpv yt-dlp ffmpeg
+   npm install -g webtorrent-cli
+   ```
+
+   **Windows (native, via winget):**
+   ```powershell
+   winget install mpv-player.mpv
+   winget install yt-dlp.yt-dlp
+   winget install Gyan.FFmpeg
+   npm install -g webtorrent-cli
+   ```
+   Run the app from **PowerShell or Windows Terminal** (the mouse-based TUI needs a proper terminal — it will not work in the old `cmd` window).
+
+   **Windows (alternative — WSL):** if you prefer a Linux environment, install [WSL](https://learn.microsoft.com/windows/wsl/install), then follow the Debian/Ubuntu instructions above inside the WSL distro.
 
 3. **Install Python packages:**
 
@@ -105,7 +141,7 @@ Freedom also runs on **Android** — the Freedom app has a dedicated Android bui
 
 ### Requirements
 
-- Linux (terminal environment)
+- **Linux** (Debian/Ubuntu, Arch, Fedora, openSUSE) or **Windows** (native via winget, or WSL)
 - Python 3.10+
 - ~500MB free disk space
 - Internet connection (for streaming)
