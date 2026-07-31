@@ -2,7 +2,7 @@
 
 **Freedom** is a terminal-based **anime and movie streaming** app. Search across multiple providers, **stream** or **download** content, and play it back with hardware-accelerated **MPV** — all from a mouse-driven TUI with torrent support and a plugin system, without leaving your terminal.
 
-Freedom also runs on **Android** — the Freedom app has a dedicated Android build with a native APK. See the [Freedom Android](https://github.com/Eskoxx/Freedom-Android) repo.
+Freedom also runs on **Android** — the Freedom app has a dedicated Android build with a native APK. See the [Freedom Android](https://github.com/Eskoxx/Freedom-Android) repo, or grab the ready-to-install **arm64 APK** from the [releases](https://github.com/Eskoxx/Freedom/releases/tag/android-v1.0.0) page.
 
 ![Freedom terminal](freedom-terminal.png)
 
