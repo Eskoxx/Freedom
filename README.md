@@ -2,7 +2,7 @@
 
 Freedom turns your terminal into a portable media streamer. Open the app, and a text-based interface (with full mouse support) lets you search across multiple providers, stream or download content, and play it back with hardware-accelerated MPV — all without leaving the terminal.
 
-Freedom also runs on **Android** — the Freedom app has a dedicated Android build with a native APK. See the [Freedom Android](https://github.com/your-username/freedom-android) repo.
+Freedom also runs on **Android** — the Freedom app has a dedicated Android build with a native APK. See the [Freedom Android](https://github.com/Eskoxx/Freedom-Android) repo.
 
 ## Contents
 
