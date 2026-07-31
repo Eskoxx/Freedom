@@ -1,0 +1,86 @@
+"""
+Anime Watch Provider Plugin — Example
+=======================================
+Drop this file (or any .py file) into:
+  ~/.config/anime-watch/providers/
+or
+  user_providers/   (project root)
+
+It will be discovered automatically — no code changes needed.
+
+Looking for sites to build a plugin for?
+  Movies: https://fmhy.net/video
+  Anime:  https://everythingmoe.com/
+"""
+
+from anime_watch.providers.base import BaseProvider
+from anime_watch.models import SearchResult, Episode, StreamSource
+from typing import Optional
+
+
+class ExampleProvider(BaseProvider):
+    # ── REQUIRED metadata ──────────────────────────────────────────
+    name = "Example"          # Display name in the UI
+    slug = "example"          # Internal key (lowercase, no spaces)
+    url = "https://example.com"
+    category = "anime"        # "anime" or "movies"
+
+    # ── REQUIRED methods ────────────────────────────────────────────
+
+    def search(self, query: str) -> list[SearchResult]:
+        """
+        Called when the user searches.
+        Return a list of SearchResult objects.
+        Each result represents an anime/movie, NOT an episode.
+        """
+        # Example: fetch https://example.com/search?q={query}
+        # Parse HTML, extract titles, URLs, images
+        return [
+            SearchResult(
+                title="Some Anime",
+                url="https://example.com/anime/123",
+                site_name=self.name,
+                image="",
+            ),
+        ]
+
+    def get_episodes(self, result: SearchResult) -> list[Episode]:
+        """
+        Called when the user clicks a search result.
+        Return a list of Episode objects.
+        """
+        # Example: fetch result.url, parse episode list
+        return [
+            Episode(
+                title="Episode 1",
+                url=result.url,
+                number="1",
+                site_name=self.name,
+                anime_name=result.title,
+                data={},
+            ),
+        ]
+
+    def extract_stream(self, episode: Episode, audio_pref: str = "sub",
+                       quality_pref: str = "best") -> Optional[StreamSource]:
+        """
+        Called when the user clicks an episode to play.
+        Return a StreamSource with a playable URL (m3u8, mp4, etc.).
+        Return None if the stream can't be extracted.
+        """
+        # Example: fetch the episode page, extract video URL
+        return StreamSource(
+            url="https://example.com/stream/master.m3u8",
+            site_name=self.name,
+            quality=quality_pref,
+            is_direct=True,
+            headers={"Referer": "https://example.com/"},
+        )
+
+    # ── OPTIONAL ────────────────────────────────────────────────────
+
+    def get_supported_qualities(self) -> list[str]:
+        return ["1080p", "720p", "480p", "best"]
+
+    def get_supported_audio(self) -> list[str]:
+        return ["sub", "dub"]

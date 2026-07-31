@@ -1,0 +1,27 @@
+downloads/
+__pycache__/
+*.pyc
+*.pyo
+history.json
+.env
+.DS_Store
+.vscode/
+.idea/
+dist/
+build/
+*.egg-info/
+*.log
+.coverage
+htmlcov/
+.pytest_cache/
+venv/
+.venv/
+user_providers/*.py
+user_providers/__pycache__/
+
+# local dev files
+mpv-shot*.jpg
+plan.md
+plan_progress.md
+test_scrape.py
+setup_netmirror.py

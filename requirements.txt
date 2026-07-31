@@ -1,0 +1,7 @@
+requests
+beautifulsoup4
+textual
+lxml
+curl_cffi
+# webtorrent-cli required for torrent streaming:
+# npm install -g webtorrent-cli
