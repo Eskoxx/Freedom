@@ -84,19 +84,28 @@ class PlaybackHandler:
                 pass
             await asyncio.sleep(poll_interval)
 
-    async def _download_sub(self, url: str, headers: dict, out: list[str]):
+    @staticmethod
+    def _sub_path(label: str, ext: str) -> str:
+        safe = "".join(c if c not in "/\\" else "-" for c in label if c >= " ").strip()[:60] or "sub"
+        base = os.path.join(tempfile.gettempdir(), f"{safe}{ext}")
+        if not os.path.exists(base):
+            return base
+        i = 2
+        while os.path.exists(f"{base}-{i}{ext}"):
+            i += 1
+        return f"{base}-{i}{ext}"
+
+    async def _download_sub(self, url: str, headers: dict, out: list[str], label: str = ""):
         try:
             resp = await asyncio.to_thread(
                 requests.get, url, headers=headers, timeout=10
             )
             if resp.status_code == 200:
                 ext = ".vtt" if url.endswith(".vtt") else ".srt"
-                tmp = tempfile.NamedTemporaryFile(
-                    suffix=ext, delete=False, prefix="aw-sub-"
-                )
-                tmp.write(resp.content)
-                tmp.close()
-                out.append(tmp.name)
+                path = self._sub_path(label, ext)
+                with open(path, "wb") as f:
+                    f.write(resp.content)
+                out.append(path)
         except Exception:
             pass
 
@@ -134,7 +143,7 @@ class PlaybackHandler:
                     sub_files.append(_url)
                 else:
                     sub_tasks.append(asyncio.create_task(
-                        self._download_sub(_url, sub_headers, sub_files)
+                        self._download_sub(_url, sub_headers, sub_files, sub.get("label") or lang)
                     ))
             if sub_tasks:
                 await asyncio.gather(*sub_tasks)
