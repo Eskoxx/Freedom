@@ -17,8 +17,8 @@ from anime_watch.core import SESSION, SCRAPE_TIMEOUT
 from .base import BaseProvider
 
 
-BASE = "https://streamingunity.dog"
-CDN = "https://cdn.streamingunity.dog"
+BASE = "https://streamingunity.vip"
+CDN = "https://cdn.streamingunity.vip"
 IFRAME_BASE = f"{BASE}/en/iframe"
 SEARCH_URL = f"{BASE}/en/search"
 TITLE_URL = f"{BASE}/en/titles"
@@ -421,7 +421,7 @@ def _make_proxied_stream(master_url: str, referer: str) -> Optional[StreamSource
 class StreamingUnityProvider(BaseProvider):
     name = "StreamingUnity"
     slug = "streamingunity"
-    url = "https://streamingunity.dog"
+    url = "https://streamingunity.vip"
     category = "movies"
 
     def get_supported_qualities(self) -> list[str]:
