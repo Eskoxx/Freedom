@@ -10,6 +10,8 @@ from anime_watch.core import (
 from .anidb import AniDBProvider
 from .anikoto import AnikotoProvider
 from .tryembed import TryEmbedProvider
+from .anineko import AniNekoProvider
+from .anizone import AniZoneProvider
 from .bingr import BingrProvider
 from .fmovies import FmoviesProvider
 from .netmirror import NetMirrorProvider
@@ -25,11 +27,15 @@ ANIME_SITES = [
     Site(name="Anikoto", slug="anikoto", url="https://anikototv.to", rank=1, category="anime"),
     Site(name="AniDB", slug="anidb", url="https://anidb.app", rank=2, category="anime"),
     Site(name="TryEmbed", slug="tryembed", url="https://tryembed.us.cc", rank=3, category="anime"),
+    Site(name="AniNeko", slug="anineko", url="https://anineko.to", rank=4, category="anime"),
+    Site(name="AniZone", slug="anizone", url="https://anizone.to", rank=5, category="anime"),
 ]
 ANIME_PROVIDERS = {
     "anidb": AniDBProvider(),
     "anikoto": AnikotoProvider(),
     "tryembed": TryEmbedProvider(),
+    "anineko": AniNekoProvider(),
+    "anizone": AniZoneProvider(),
 }
 
 MOVIE_SITES: list[Site] = [

@@ -107,11 +107,17 @@ class _SegmentProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Connection", "close")
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.end_headers()
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
         except Exception:
-            self.send_response(502)
-            self.end_headers()
+            try:
+                self.send_response(502)
+                self.end_headers()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
 
     def _serve_text(self, content: str):
         data = content.encode()
@@ -119,8 +125,11 @@ class _SegmentProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/vnd.apple.mpegurl")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
     def log_message(self, *a):
         pass
