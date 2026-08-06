@@ -37,10 +37,11 @@ class HlsProxy:
     SEG_TIMEOUT = 25
 
     def __init__(self, master_url: str, referer: str = "", headers: Optional[dict] = None,
-                 key_url: Optional[str] = None):
+                 key_url: Optional[str] = None, variant_height: Optional[int] = None):
         self._referer = referer
         self._headers = {"User-Agent": _DEFAULT_UA, **(headers or {})}
         self._key_url = key_url
+        self._variant_height = variant_height
         self._local = threading.local()
         self._lock = threading.Lock()
         self._pool = ThreadPoolExecutor(max_workers=self.WORKERS, thread_name_prefix="hlsseg")
@@ -192,15 +193,24 @@ class HlsProxy:
 
         vid_uris = []
         vid_bws = []
+        vid_heights: list[int] = []
         for i, line in enumerate(lines):
             if line.startswith("#EXT-X-STREAM-INF"):
                 m = re.search(r"BANDWIDTH=(\d+)", line)
                 vid_bws.append(int(m.group(1)) if m else 0)
+                hm = re.search(r"RESOLUTION=\d+x(\d+)", line)
+                vid_heights.append(int(hm.group(1)) if hm else 0)
                 for j in range(i + 1, len(lines)):
                     nxt = lines[j].strip()
                     if nxt and not nxt.startswith("#"):
                         vid_uris.append(nxt)
                         break
+        if self._variant_height:
+            keep = [k for k, h in enumerate(vid_heights) if h == self._variant_height]
+            if keep:
+                vid_uris = [vid_uris[k] for k in keep]
+                vid_bws = [vid_bws[k] for k in keep]
+                vid_heights = [vid_heights[k] for k in keep]
         vid_routes = {}
         base_vid = len(media)
         for gi, uri in enumerate(vid_uris):
