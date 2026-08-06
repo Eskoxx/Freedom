@@ -91,6 +91,8 @@ class _VixHlsProxy:
 
     PREFETCH = 20
     WORKERS = 20
+    WARM_SEGS = 8
+    URGENT_WORKERS = 4
     SEG_TIMEOUT = 25
 
     def __init__(self, master_url: str, referer: str):
@@ -98,6 +100,9 @@ class _VixHlsProxy:
         self._local = threading.local()
         self._lock = threading.Lock()
         self._pool = ThreadPoolExecutor(max_workers=self.WORKERS, thread_name_prefix="vixseg")
+        # On-demand (player-critical) fetches go to their own pool so they never
+        # queue behind background prefetch jobs.
+        self._urgent = ThreadPoolExecutor(max_workers=self.URGENT_WORKERS, thread_name_prefix="vixurg")
         self._cache: dict[int, bytes] = {}
         self._inflight: dict[int, Future] = {}
         self._seg_url: dict[int, str] = {}
@@ -111,6 +116,7 @@ class _VixHlsProxy:
         self._default_audio_group: Optional[int] = None
         self._default_audio_route: Optional[str] = None
         self._video_routes: list[str] = []
+        self._video_bws: list[int] = []
         self._pl_lock = threading.Lock()
         self._pl_inflight: dict[str, Future] = {}
         self._build(master_url)
@@ -226,8 +232,11 @@ class _VixHlsProxy:
                 self._default_audio_route = route
 
         vid_uris = []
+        vid_bws = []
         for i, line in enumerate(lines):
             if line.startswith("#EXT-X-STREAM-INF"):
+                m = re.search(r"BANDWIDTH=(\d+)", line)
+                vid_bws.append(int(m.group(1)) if m else 0)
                 for j in range(i + 1, len(lines)):
                     nxt = lines[j].strip()
                     if nxt and not nxt.startswith("#"):
@@ -243,6 +252,7 @@ class _VixHlsProxy:
             self._pending[route] = uri
             self._group_route[full] = route
             self._video_routes.append(route)
+            self._video_bws.append(vid_bws[gi])
             vid_routes[uri] = route
 
         rewritten = []
@@ -273,12 +283,14 @@ class _VixHlsProxy:
         except OSError:
             pass
         self._pool.shutdown(wait=False, cancel_futures=True)
+        self._urgent.shutdown(wait=False, cancel_futures=True)
 
-    def _submit(self, idx: int) -> Future:
+    def _submit(self, idx: int, urgent: bool = False) -> Future:
         with self._lock:
             fut = self._inflight.get(idx)
             if fut is None:
-                fut = self._pool.submit(self._fetch, idx)
+                pool = self._urgent if urgent else self._pool
+                fut = pool.submit(self._fetch, idx)
                 self._inflight[idx] = fut
         return fut
 
@@ -309,7 +321,8 @@ class _VixHlsProxy:
             data = self._cache.get(idx)
             fut = None if data is not None else self._inflight.get(idx)
         if data is None and fut is None:
-            fut = self._submit(idx)
+            # Player-critical request: never queue behind prefetch.
+            fut = self._submit(idx, urgent=True)
         if fut is not None:
             try:
                 data = fut.result(timeout=self.SEG_TIMEOUT)
@@ -342,18 +355,27 @@ class _VixHlsProxy:
                 f.result(timeout=30)
             except Exception:
                 pass
-        primary = self._video_routes[:1]
-        for route in primary:
-            gi = self._route_group(route)
-            for j in self._groups[gi][:self.PREFETCH + 1]:
+        # Warm the highest-bandwidth variant (the one mpv actually plays) plus
+        # the default audio route, and only a few segments each so the worker
+        # pool is not flooded at startup.
+        primary = None
+        if self._video_bws:
+            primary = self._video_routes[self._video_bws.index(max(self._video_bws))]
+        elif self._video_routes:
+            primary = self._video_routes[-1]
+        if primary:
+            gi = self._route_group(primary)
+            for j in self._groups[gi][:self.WARM_SEGS + 1]:
                 self._submit(j)
-        for route in self._video_routes[1:]:
+        for route in self._video_routes:
+            if route == primary:
+                continue
             gi = self._route_group(route)
             if self._groups[gi]:
                 self._submit(self._groups[gi][0])
         if self._default_audio_route is not None:
             gi = self._route_group(self._default_audio_route)
-            for j in self._groups[gi][:self.PREFETCH + 1]:
+            for j in self._groups[gi][:self.WARM_SEGS + 1]:
                 self._submit(j)
 
 
