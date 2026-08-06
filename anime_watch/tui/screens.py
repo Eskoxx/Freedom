@@ -262,6 +262,12 @@ class NetmirrorSetupOverlay(Screen):
         cookie_path = os.path.expanduser("~/.config/anime-watch/net77_cookies.json")
         if os.path.exists(cookie_path):
             age = time.time() - os.path.getmtime(cookie_path)
+            if age > 3 * 3600:
+                # Cookies fetched more than 3 hours ago: force the setup
+                # panel (Run Script) regardless of the server-side check.
+                self._show_setup_instructions()
+                self.query_one("#ns-ok-btn", Button).focus()
+                return
             self.query_one("#ns-title", Static).update("Checking NetMirror Cookies")
             self.query_one("#ns-body", Static).update(
                 "Saved cookies found — verifying with server...\n\n"
@@ -287,12 +293,23 @@ class NetmirrorSetupOverlay(Screen):
         self.query_one("#ns-run-btn").display = True
         self.query_one("#ns-ok-btn", Button).focus()
 
+    def _cookie_label(self) -> str:
+        import json as _json
+        try:
+            with open(os.path.expanduser("~/.config/anime-watch/net77_cookies.json")) as _f:
+                cid = _json.load(_f).get("_id")
+            if cid:
+                return f"Cookies #{cid}"
+        except Exception:
+            pass
+        return "Cookies"
+
     def _show_cookies_valid(self, age: str):
         self.query_one("#ns-title", Static).update("[green]✓ Cookies Valid[/green]")
         self.query_one("#ns-body", Static).update(
             "NetMirror cookies are valid — you can search\n"
             "and stream normally.\n\n"
-            f"[dim]Fetched {age} ago[/dim]"
+            f"[dim]{self._cookie_label()} — fetched {age} ago[/dim]"
         )
         self.query_one("#ns-run-btn").display = False
         self.query_one("#ns-ok-btn", Button).focus()
@@ -306,7 +323,7 @@ class NetmirrorSetupOverlay(Screen):
             "Or press [bold]Run Script[/bold] to launch it from here.\n"
             "This opens a browser window — sign in with\n"
             "Gmail and cookies are saved automatically."
-            + f"\n\n[dim]Fetched {age} ago[/dim]"
+            + f"\n\n[dim]{self._cookie_label()} — fetched {age} ago[/dim]"
         )
         self.query_one("#ns-run-btn").display = True
         self.query_one("#ns-ok-btn", Button).focus()
@@ -317,7 +334,10 @@ class NetmirrorSetupOverlay(Screen):
         age = _fmt_age(time.time() - os.path.getmtime(cookie_path))
         try:
             with open(cookie_path) as _f:
-                cookies = _json.load(_f)
+                raw = _json.load(_f)
+            # Strip metadata keys (_id, _fetched_at) — sending them as cookies
+            # makes the server-side check fail.
+            cookies = {k: v for k, v in raw.items() if not k.startswith("_")}
             if not cookies:
                 self._show_cookies_expired(age)
                 return

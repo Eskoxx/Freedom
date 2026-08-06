@@ -127,13 +127,34 @@ def get_cookies_via_cdp(brave_path, port):
 
         cdp_send(tab_ws, 3, "Page.navigate", {"url": "https://net77.cc/"})
         cdp_recv(tab_ws, 3)
+
+        # Delete ONLY this site's existing cookies (old user_token from a
+        # previous login), so the poll below requires a fresh login — without
+        # touching any other website's cookies.
+        cdp_send(tab_ws, 4, "Network.getAllCookies")
+        all_cookies = cdp_recv(tab_ws, 4).get("result", {}).get("cookies", [])
+        del_id = 5
+        for c in all_cookies:
+            domain = c.get("domain", "")
+            name = c.get("name", "")
+            if "net77" in domain or "net52" in domain or "nm-cdn" in domain:
+                cdp_send(tab_ws, del_id, "Network.deleteCookies",
+                         {"name": name, "url": f"https://{domain.lstrip('.')}/"})
+                cdp_recv(tab_ws, del_id)
+                del_id += 1
+        if del_id > 5:
+            print(f"  Removed {del_id - 5} stale cookie(s) from this site")
+
+        cdp_send(tab_ws, del_id, "Page.navigate", {"url": "https://net77.cc/"})
+        cdp_recv(tab_ws, del_id)
+
         print("  Navigated to net77.cc")
         print("")
         print("  Log in with Gmail on the page that opened.")
         print("  Waiting for login... (check the browser window)")
 
         saved_cookies = None
-        poll_id = 4
+        poll_id = del_id + 1
         while True:
             time.sleep(2)
             cdp_send(tab_ws, poll_id, "Network.getAllCookies")
@@ -143,11 +164,15 @@ def get_cookies_via_cdp(brave_path, port):
 
             for c in cookies:
                 if c["name"] == "user_token" and c["value"]:
+                    # A token present here was issued after the deletion +
+                    # reload above: either a fresh manual login or the site
+                    # re-issued the session automatically (active Gmail).
+                    # Both are valid sessions.
                     net77_cookies = {}
                     for cc in cookies:
                         domain = cc.get("domain", "")
                         name = cc["name"]
-                        if "net77" in domain or "net52" in domain or "nm-cdn" in domain or name in ("user_token", "t_hash", "t_hash_p", "cf_clearance", "t_hash"):
+                        if "net77" in domain or "net52" in domain or "nm-cdn" in domain:
                             net77_cookies[name] = cc["value"]
                             print(f"    cookie: {name} (domain: {domain})")
                     if "user_token" in net77_cookies:
@@ -188,20 +213,32 @@ def main():
 
     port = CDP_PORT
     try:
+        old_id = 0
+        try:
+            with open(CONFIG_FILE) as f:
+                old_data = json.load(f)
+            old_id = int(old_data.get("_id", 0) or 0)
+        except Exception:
+            pass
+        new_id = old_id + 1
+        print(f"  Cookie set #{new_id} (previous was #{old_id})")
+
         cookies = get_cookies_via_cdp(BRAVE_BIN, port)
     except Exception as e:
         print(f"  Error: {e}")
         return 1
 
     os.makedirs(CONFIG_DIR, exist_ok=True)
+    cookies["_id"] = new_id
+    cookies["_fetched_at"] = int(time.time())
     with open(CONFIG_FILE, "w") as f:
         json.dump(cookies, f, indent=2)
 
     print()
-    print(f"  Cookies saved to: {CONFIG_FILE}")
+    print(f"  Cookies saved as set #{new_id} to: {CONFIG_FILE}")
     print(f"  You can now use the NetMirror provider.")
     print()
-    print(f"  Captured cookies: {list(cookies.keys())}")
+    print(f"  Captured cookies: {[k for k in cookies if not k.startswith('_')]}")
 
     return 0
 

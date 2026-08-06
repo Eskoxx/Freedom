@@ -50,7 +50,10 @@ def load_cookies() -> dict[str, str]:
         return {}
     try:
         with open(CONFIG_FILE) as f:
-            return json.load(f)
+            data = json.load(f)
+        # Strip metadata keys (e.g. _id, _fetched_at) so they are never
+        # sent as cookies.
+        return {k: v for k, v in data.items() if not k.startswith("_")}
     except (json.JSONDecodeError, OSError):
         return {}
 
