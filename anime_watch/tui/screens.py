@@ -266,10 +266,15 @@ class CommunityOverlay(Screen):
                     id="cm-body",
                 )
                 yield Static("", classes="spacer-sm")
-                with Horizontal(classes="op-buttons"):
-                    yield Button("Join", id="cm-join-btn", classes="ns-btn")
-                    yield Button("Later", id="cm-later-btn", classes="ns-btn")
-                    yield Button("Don't show again", id="cm-hide-btn", classes="ns-btn")
+                with Horizontal(classes="splash-hints-row"):
+                    yield Button("join", id="cm-join-btn", classes="hint-btn")
+                    yield Static(" · ", classes="hint-text")
+                    yield Button("later", id="cm-later-btn", classes="hint-btn")
+                    yield Static(" · ", classes="hint-text")
+                    yield Button("don't show again", id="cm-hide-btn", classes="hint-btn")
+                    yield Static(" · ", classes="hint-text")
+                    yield Static("esc", classes="hint-key")
+                    yield Static(" close", classes="hint-text")
 
     def action_later(self):
         self.app.pop_screen()
