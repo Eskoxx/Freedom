@@ -81,6 +81,8 @@ class SplashScreen(Screen):
                     yield Static("  ·  ", classes="hint-text")
                     yield Button("history", id="splash-history-btn", classes="hint-btn")
                     yield Static("  ·  ", classes="hint-text")
+                    yield Button("dev?", id="splash-community-btn", classes="hint-btn")
+                    yield Static("  ·  ", classes="hint-text")
                     yield Static("^c", classes="hint-key")
                     yield Static(" quit", classes="hint-text")
                 yield Static("", classes="spacer-sm")
@@ -188,6 +190,8 @@ class SplashScreen(Screen):
             self.app.push_screen(DownloadsScreen())
         elif event.button.id == "splash-history-btn":
             self.app.push_screen(HistoryScreen())
+        elif event.button.id == "splash-community-btn":
+            self.app.push_screen(CommunityOverlay())
         elif event.button.id and event.button.id.startswith("cw-"):
             entry = getattr(event.button, "_cw_entry", None)
             if entry:
@@ -236,6 +240,78 @@ def _fmt_age(seconds: float) -> str:
         return f"{int(seconds // 3600)}h"
     else:
         return f"{int(seconds // 86400)}d"
+
+
+class CommunityOverlay(Screen):
+    """One-time invite to join the project's Telegram community."""
+
+    COMMUNITY_URL = "https://t.me/+u2X2c3h0E304NzA1"
+    MARKER = os.path.expanduser("~/.config/anime-watch/community_seen")
+
+    BINDINGS = [
+        Binding("escape", "later", "Later"),
+        Binding("ctrl+c", "quit", "Quit"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Container(classes="op-root"):
+            with Vertical(classes="op-card"):
+                yield Static("Join the Community", id="cm-title", classes="op-title")
+                yield Static("", classes="spacer-sm")
+                yield Static(
+                    "Report bugs, request features, or just\n"
+                    "hang out — the dev is active there.\n\n"
+                    "[dim]Telegram[/dim]\n"
+                    f"[dim]{CommunityOverlay.COMMUNITY_URL}[/dim]",
+                    id="cm-body",
+                )
+                yield Static("", classes="spacer-sm")
+                with Horizontal(classes="op-buttons"):
+                    yield Button("Join", id="cm-join-btn", classes="ns-btn")
+                    yield Button("Later", id="cm-later-btn", classes="ns-btn")
+                    yield Button("Don't show again", id="cm-hide-btn", classes="ns-btn")
+
+    def action_later(self):
+        self.app.pop_screen()
+
+    @staticmethod
+    def _mark_seen():
+        try:
+            os.makedirs(os.path.dirname(CommunityOverlay.MARKER), exist_ok=True)
+            with open(CommunityOverlay.MARKER, "w") as f:
+                f.write("1")
+        except OSError:
+            pass
+
+    def _open_link(self):
+        try:
+            if os.environ.get("ANDROID_ROOT") is not None:
+                import shutil as _shutil
+                import subprocess as _sp
+                cmd = ["termux-am", "start", "-a", "android.intent.action.VIEW", "-d", self.COMMUNITY_URL]
+                if _shutil.which("termux-am") is None:
+                    cmd[0] = "am"
+                _sp.Popen(cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+            else:
+                import subprocess as _sp
+                _sp.Popen(["xdg-open", self.COMMUNITY_URL],
+                          stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        except Exception:
+            pass
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "cm-join-btn":
+            self._mark_seen()
+            self._open_link()
+            self.app.pop_screen()
+        elif event.button.id == "cm-later-btn":
+            self.app.pop_screen()
+        elif event.button.id == "cm-hide-btn":
+            self._mark_seen()
+            self.app.pop_screen()
+
+    def on_mount(self):
+        self.query_one("#cm-join-btn", Button).focus()
 
 
 class NetmirrorSetupOverlay(Screen):

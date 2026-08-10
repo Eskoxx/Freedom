@@ -169,31 +169,72 @@ class AniZoneProvider(BaseProvider):
             if resp.status_code != 200:
                 return episodes
             text = resp.text
+
+            # The episode list is paginated (36 per page); parse the total
+            # page count from the pagination widget and fetch the rest.
+            max_pages = 1
+            mp = re.search(r'maxPages:\s*(\d+)', text)
+            if mp:
+                max_pages = max(1, int(mp.group(1)))
+
+            def _page_episodes(page_text: str) -> list[Episode]:
+                found = []
+                for m2 in re.finditer(r'x-data="(\{[^"]*epsTitles[^"]*\})"', page_text):
+                    ctx_end = min(len(page_text), m2.end() + 3000)
+                    ctx = page_text[m2.start():ctx_end]
+                    num_m = re.search(r'href="(?:https://anizone\.to)?/anime/[a-z0-9-]+/(\d+)"', ctx)
+                    if not num_m:
+                        continue
+                    num = num_m.group(1)
+                    title = f"Episode {num}"
+                    xdata = _decode_entities(m2.group(1))
+                    raw = _extract_json_arg(xdata, "epsTitles")
+                    if raw:
+                        title = _pick_title(_process_json_arg(raw)) or title
+                    found.append(Episode(
+                        title=title,
+                        url=f"{BASE}/anime/{slug}/{num}",
+                        number=num,
+                        site_name=self.name,
+                        anime_name=an,
+                        data={"slug": slug, "ep_num": num, "sub": 1, "dub": 0},
+                    ))
+                return found
+
+            def _fetch_page(pg: int) -> list[Episode]:
+                if pg <= 1:
+                    return _page_episodes(text)
+                try:
+                    r2 = SESSION.get(
+                        f"{BASE}/anime/{slug}?page={pg}",
+                        headers={"Referer": f"{BASE}/anime/{slug}"},
+                        timeout=SCRAPE_TIMEOUT,
+                    )
+                    if r2.status_code != 200:
+                        return []
+                    return _page_episodes(r2.text)
+                except requests.RequestException:
+                    return []
+
+            pages = [text] if max_pages <= 1 else [None] * max_pages
+            if max_pages > 1:
+                import concurrent.futures as _cf
+                with _cf.ThreadPoolExecutor(max_workers=6) as pool:
+                    futures = {pool.submit(_fetch_page, pg): pg for pg in range(1, max_pages + 1)}
+                    for fut in _cf.as_completed(futures):
+                        episodes.extend(fut.result() or [])
+            else:
+                episodes = _page_episodes(text)
+
             seen = set()
-            for m2 in re.finditer(r'x-data="(\{[^"]*epsTitles[^"]*\})"', text):
-                ctx_end = min(len(text), m2.end() + 3000)
-                ctx = text[m2.start():ctx_end]
-                num_m = re.search(r'href="(?:https://anizone\.to)?/anime/[a-z0-9-]+/(\d+)"', ctx)
-                if not num_m:
+            deduped = []
+            for e in episodes:
+                if e.number in seen:
                     continue
-                num = num_m.group(1)
-                if num in seen:
-                    continue
-                seen.add(num)
-                xdata = _decode_entities(m2.group(1))
-                title = f"Episode {num}"
-                raw = _extract_json_arg(xdata, "epsTitles")
-                if raw:
-                    title = _pick_title(_process_json_arg(raw)) or title
-                episodes.append(Episode(
-                    title=title,
-                    url=f"{BASE}/anime/{slug}/{num}",
-                    number=num,
-                    site_name=self.name,
-                    anime_name=an,
-                    data={"slug": slug, "ep_num": num, "sub": 1, "dub": 0},
-                ))
-            episodes.sort(key=lambda e: int(e.number))
+                seen.add(e.number)
+                deduped.append(e)
+            deduped.sort(key=lambda e: int(e.number))
+            return deduped
         except requests.RequestException:
             pass
         return episodes

@@ -116,6 +116,13 @@ class AnimeWatch(App):
         except Exception:
             pass
         self.push_screen(SplashScreen())
+        try:
+            import os as _os
+            if not _os.path.exists(_os.path.expanduser("~/.config/anime-watch/community_seen")):
+                from anime_watch.tui.screens import CommunityOverlay
+                self.set_timer(0.6, lambda: self.push_screen(CommunityOverlay()))
+        except Exception:
+            pass
 
     def _cleanup_webtorrent(self):
         from anime_watch.torrent.engine import get_engine
