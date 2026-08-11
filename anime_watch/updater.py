@@ -125,6 +125,9 @@ def _apply_manifest(manifest: dict[str, str]) -> int:
             rel = os.path.relpath(full, pkg)
             if rel in keep:
                 continue
+            if rel.startswith("providers/"):
+                # providers/ is owned by the separate providers feed
+                continue
             try:
                 os.unlink(full)
             except OSError:
@@ -170,6 +173,166 @@ def check_for_updates(timeout: float = 5.0, apply: bool = True) -> bool:
         _apply_update_async(remote_text)
     return True
 
+
+
+# ── Providers feed (separate repo: Eskoxx/providers) ──
+
+_PROVIDERS_REPO = "Eskoxx/providers"
+_PROVIDERS_PREFIX = "providers"
+
+def _providers_raw_url(path: str) -> str:
+    return f"https://raw.githubusercontent.com/{_PROVIDERS_REPO}/main/{_PROVIDERS_PREFIX}/{path}"
+
+def _providers_dir() -> str:
+    return os.path.join(_pkg_dir(), "providers")
+
+def _read_local_providers_version() -> int:
+    marker = os.path.join(_providers_dir(), ".providers-version")
+    try:
+        with open(marker, "r", encoding="utf-8") as f:
+            return _parse_version(f.read())
+    except (OSError, ValueError):
+        return 0
+
+def _write_local_providers_version(remote_text: str) -> None:
+    marker = os.path.join(_providers_dir(), ".providers-version")
+    try:
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write(remote_text.strip() + "\\n")
+    except OSError:
+        pass
+
+def fetch_providers_version(timeout: float = 5.0) -> str:
+    return _http_get(_providers_raw_url(".update-version"), timeout).decode("utf-8", "replace")
+
+def _fetch_providers_manifest(timeout: float = 10.0) -> dict[str, str]:
+    body = _http_get(_providers_raw_url(".update-manifest"), timeout).decode("utf-8", "replace")
+    prefix = _PROVIDERS_PREFIX + "/"
+    manifest = {}
+    for line in body.splitlines():
+        line = line.strip()
+        if not line or "  " not in line:
+            continue
+        digest, rel = line.split("  ", 1)
+        rel = rel.strip()
+        if rel.startswith(prefix):
+            rel = rel[len(prefix):]
+        manifest[rel] = digest.strip()
+    return manifest
+
+def _apply_providers_manifest(manifest: dict[str, str]) -> int:
+    pkg = _providers_dir()
+    os.makedirs(pkg, exist_ok=True)
+    changed = 0
+    for rel, digest in manifest.items():
+        dest = os.path.join(pkg, rel)
+        if os.path.isfile(dest) and _sha256_file(dest) == digest:
+            continue
+        try:
+            data = _http_get(_providers_raw_url(rel), timeout=30)
+        except Exception:
+            continue
+        if hashlib.sha256(data).hexdigest() != digest:
+            continue
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        tmp = dest + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, dest)
+        changed += 1
+    keep = set(manifest.keys()) | {".providers-version"}
+    for root, _dirs, files in os.walk(pkg):
+        if "__pycache__" in root:
+            continue
+        for fname in files:
+            full = os.path.join(root, fname)
+            rel = os.path.relpath(full, pkg)
+            if rel in keep:
+                continue
+            try:
+                os.unlink(full)
+            except OSError:
+                pass
+    return changed
+
+def apply_providers_update_sync(remote_text: str, timeout: float = 30.0, progress_cb=None) -> bool:
+    """Download + apply the providers feed synchronously (two-phase).
+
+    All files are downloaded and verified before anything is written, so a
+    failure leaves the current providers untouched.
+    """
+    try:
+        manifest = _fetch_providers_manifest(timeout)
+    except Exception:
+        return False
+    if not manifest:
+        return False
+    entries = sorted(manifest.items())
+    total = len(entries)
+    staged: list[tuple[str, bytes]] = []
+    for i, (rel, digest) in enumerate(entries, start=1):
+        try:
+            data = _http_get(_providers_raw_url(rel), timeout)
+        except Exception:
+            return False
+        if hashlib.sha256(data).hexdigest() != digest:
+            return False
+        staged.append((rel, data))
+        if progress_cb:
+            progress_cb(i, total, rel)
+    pkg = _providers_dir()
+    for rel, data in staged:
+        dest = os.path.join(pkg, rel)
+        try:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            tmp = dest + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, dest)
+        except OSError:
+            return False
+    keep = set(manifest.keys()) | {".providers-version"}
+    for root, _dirs, files in os.walk(pkg):
+        if "__pycache__" in root:
+            continue
+        for fname in files:
+            full = os.path.join(root, fname)
+            rel = os.path.relpath(full, pkg)
+            if rel in keep:
+                continue
+            try:
+                os.unlink(full)
+            except OSError:
+                pass
+    _write_local_providers_version(remote_text)
+    return True
+
+def _apply_providers_update_async(remote_text: str) -> None:
+    def run():
+        try:
+            manifest = _fetch_providers_manifest()
+            if not manifest:
+                return
+            if _apply_providers_manifest(manifest) > 0:
+                _write_local_providers_version(remote_text)
+        except Exception:
+            pass
+    t = threading.Thread(target=run, daemon=True, name="freedom-providers-updater")
+    t.start()
+
+def check_providers_updates(timeout: float = 5.0, apply: bool = True) -> bool:
+    """Check the providers repo for a newer version. Fail-open."""
+    try:
+        remote_text = fetch_providers_version(timeout)
+    except Exception:
+        return False
+    remote = _parse_version(remote_text)
+    local = _read_local_providers_version()
+    if remote <= local:
+        return False
+    if apply:
+        _apply_providers_update_async(remote_text)
+    return True
 
 def pending_update_notice() -> str:
     notice = os.path.join(_pkg_dir(), ".update-pending")
