@@ -44,7 +44,12 @@ def main():
     from anime_watch.updater import check_for_updates
     check_for_updates()
     _check_providers_terminal()
-    from anime_watch.tui.app import run_app
+    try:
+        from anime_watch.tui.app import run_app
+    except ImportError:
+        print("Providers unavailable — retrying fetch…")
+        _check_providers_terminal()
+        from anime_watch.tui.app import run_app
     run_app()
     return 0
 
