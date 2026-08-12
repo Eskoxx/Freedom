@@ -2045,11 +2045,11 @@ class BrowserScreen(Screen):
     def _fetch_suggestions(self, video_id: str, kind: str = "song") -> list:
         """Up Next via ytmusicapi, resolved to full-quality direct streams.
         kind='song' -> album-art tracks; kind='video' -> the music videos."""
-        from ytmusicapi import YTMusic
         from anime_watch.models import Episode
         from anime_watch.providers import extract_stream
+        from anime_watch.providers.youtubemusic import ytmusic_client
         try:
-            ym = YTMusic()
+            ym = ytmusic_client()
             panel = ym.get_watch_playlist(video_id)
         except Exception:
             return []

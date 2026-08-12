@@ -457,7 +457,7 @@ class PlaybackHandler:
             ep0 = episode
         is_music = getattr(ep0, "site_name", "") == "ytmusic"
         if tracks is not None and is_music:
-            await self._do_play_music(tracks, overlay, prefetch_cb)
+            await self._do_play_music(tracks, overlay, prefetch_cb=prefetch_cb)
         else:
             if tracks is not None:
                 stream = tracks[0][1]
