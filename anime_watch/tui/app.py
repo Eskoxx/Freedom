@@ -74,6 +74,18 @@ Screen { background: #0d0b14; }
 .op-btn:hover, .ns-btn:hover { color: #d8b4fe; }
 .op-btn:focus, .ns-btn:focus { color: #a78bfa; text-style: bold; }
 
+.mp-card { width: 76; }
+.mp-track { width: 100%; color: #e9d5ff; text-style: bold; margin-top: 1; }
+.mp-progress { width: 100%; color: #a78bfa; }
+.mp-vol { width: 100%; color: #6b6577; margin-bottom: 1; }
+.mp-btn { display: block; }
+.mp-section { width: 100%; color: #b9a7e6; text-style: bold; margin-top: 1; }
+.mp-list { width: 100%; height: auto; max-height: 8; border: none; background: #0a0a0f; padding: 0 0 0 1; }
+.mp-list:focus { background: #14101f; }
+.mp-list ListItem { width: 100%; color: #c4b5fd; }
+.mp-list ListItem:focus { background: #2a2240; color: #e9d5ff; text-style: bold; }
+.mp-hints { width: 100%; color: #6b6577; margin-top: 1; text-align: center; }
+
 #status-bar { height: 1; width: 1fr; }
 #dl-actions { height: 3; width: 100%; align: center middle; display: none; }
 #dl-actions.visible { display: block; }
@@ -99,6 +111,8 @@ class AnimeWatch(App):
         self.downloads = {}
         self.torrent_downloads: dict[str, str] = {}
         self.torrents: dict[str, dict] = {}
+        from anime_watch.tui.player import load_settings
+        self.volume = int(load_settings().get("volume", 100))
 
     def run(self, *args, **kwargs):
         try:

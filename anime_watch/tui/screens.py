@@ -5,7 +5,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
 from textual.screen import Screen
-from textual.widgets import Input, Static, Button
+from textual.widgets import Input, Static, Button, ListView, ListItem, Label
 from textual.binding import Binding
 
 from anime_watch.models import SearchResultGroup, TorrentResult
@@ -67,6 +67,7 @@ class SplashScreen(Screen):
                     yield Button("Anime", id="splash-cat-anime", classes="cat-btn")
                     yield Button("Movies", id="splash-cat-movies", classes="cat-btn")
                     yield Button("Torrent", id="splash-cat-torrent", classes="cat-btn")
+                    yield Button("Music", id="splash-cat-music", classes="cat-btn")
                 with Horizontal(id="torrent-branch", classes="branch-row"):
                     yield Button("├── Anime", id="splash-sub-anime", classes="branch-btn")
                     yield Button("└── Movies", id="splash-sub-movies", classes="branch-btn")
@@ -101,6 +102,9 @@ class SplashScreen(Screen):
         row = self.query_one("#provider-row")
         if cat in ("torrent", "torrent-anime", "torrent-movies"):
             providers = TORRENT_PROVIDERS
+        elif cat == "music":
+            from anime_watch.providers import MUSIC_PROVIDERS
+            providers = MUSIC_PROVIDERS
         elif cat == "anime":
             providers = ANIME_PROVIDERS
         else:
@@ -118,6 +122,8 @@ class SplashScreen(Screen):
         row.add_class("visible")
 
     def _set_category(self, cat: str):
+        from anime_watch.providers import set_target_provider
+        set_target_provider("")
         self.app.search_category = cat
         has_branch = cat in ("torrent", "torrent-anime", "torrent-movies")
         branch = self.query_one("#torrent-branch")
@@ -129,11 +135,11 @@ class SplashScreen(Screen):
             self.query_one("#splash-search", Input).placeholder = "❯ Select a torrent type…"
         else:
             self.query_one("#splash-search", Input).placeholder = f"❯ Search {cat.replace('torrent-', 'torrent ')}…"
-        for btn_id in ["splash-cat-anime", "splash-cat-movies", "splash-cat-torrent"]:
+        for btn_id in ["splash-cat-anime", "splash-cat-movies", "splash-cat-torrent", "splash-cat-music"]:
             self.query_one(f"#{btn_id}").remove_class("active")
         self.query_one("#splash-sub-anime").remove_class("active")
         self.query_one("#splash-sub-movies").remove_class("active")
-        if cat in ("anime", "movies"):
+        if cat in ("anime", "movies", "music"):
             self.query_one(f"#splash-cat-{cat}").add_class("active")
         elif cat == "torrent-anime":
             self.query_one("#splash-cat-torrent").add_class("active")
@@ -144,6 +150,7 @@ class SplashScreen(Screen):
         elif cat == "torrent":
             self.query_one("#splash-cat-torrent").add_class("active")
         self._populate_providers(cat)
+        self.query_one("#splash-search", Input).focus()
 
     def _refresh_continue_watching(self):
         cw = get_continue_watching(limit=7)
@@ -169,6 +176,8 @@ class SplashScreen(Screen):
             self._set_category("movies")
         elif event.button.id == "splash-cat-torrent":
             self._set_category("torrent")
+        elif event.button.id == "splash-cat-music":
+            self._set_category("music")
         elif event.button.id == "splash-sub-anime":
             self._set_category("torrent-anime")
             self.query_one("#splash-search", Input).focus()
@@ -870,15 +879,17 @@ class OperationOverlay(Screen):
         Binding("ctrl+c", "quit", "Quit"),
         Binding("escape", "close", "Close"),
         Binding("n", "next_episode", "Next"),
+        Binding("m", "music_panel", "Music"),
     ]
 
     _SPINNER = ["◜", "◝", "◞", "◟"]
 
-    def __init__(self, title: str, kill_callback=None, next_callback=None):
+    def __init__(self, title: str, kill_callback=None, next_callback=None, browser=None):
         super().__init__()
         self._op_title = title
         self._kill = kill_callback
         self._next_cb = next_callback
+        self._browser = browser
         self._spinner_task = None
         self._spinner_base = title
 
@@ -974,6 +985,221 @@ class OperationOverlay(Screen):
         self._stop_spinner()
         if self._kill:
             self._kill()
+        self.dismiss(None)
+
+    def action_music_panel(self):
+        browser = self._browser
+        if browser is None or not hasattr(browser, "_player"):
+            return
+        self.app.push_screen(MusicPlayerOverlay(browser, browser._player))
+
+
+def _fmt_ts(sec: float) -> str:
+    sec = max(0, int(sec or 0))
+    return f"{sec // 60}:{sec % 60:02d}"
+
+
+class MusicPlayerOverlay(Screen):
+    """Full music control panel — a separate popup on top of the extraction
+    overlay. Drives mpv over IPC and lets the user browse/trim the queue and
+    the prefetched autoplay batch."""
+
+    BINDINGS = [
+        Binding("escape", "close", "Close"),
+        Binding("q", "close", "Close"),
+        Binding("p", "pause", "Pause"),
+        Binding("space", "pause", "Pause"),
+        Binding("left", "seek_back", "Seek-"),
+        Binding("right", "seek_fwd", "Seek+"),
+        Binding("<", "prev_track", "Prev"),
+        Binding(">", "next_track", "Next"),
+        Binding("-", "vol_down", "Vol-"),
+        Binding("=", "vol_up", "Vol+"),
+        Binding("+", "vol_up", "Vol+"),
+        Binding("x", "remove", "Remove"),
+        Binding("j", "move_down", ""),
+        Binding("k", "move_up", ""),
+    ]
+
+    def __init__(self, browser, player: PlaybackHandler):
+        super().__init__()
+        self._browser = browser
+        self._player = player
+        self._last_sig = None
+        self._last_pre_sig = None
+
+    def compose(self) -> ComposeResult:
+        with Container(classes="op-root"):
+            with Vertical(classes="op-card mp-card"):
+                yield Static("♫ Music Controls", id="mp-title", classes="op-title")
+                yield Static("", id="mp-track", classes="mp-track")
+                yield Static("", id="mp-progress", classes="mp-progress")
+                with Horizontal(classes="op-buttons"):
+                    yield Button("⏮", id="mp-prev-btn", classes="op-btn mp-btn")
+                    yield Button("⏯", id="mp-pause-btn", classes="op-btn mp-btn")
+                    yield Button("⏭", id="mp-next-btn", classes="op-btn mp-btn")
+                    yield Button("⏹", id="mp-stop-btn", classes="op-btn mp-btn")
+                    yield Button("Vol−", id="mp-voldn-btn", classes="op-btn mp-btn")
+                    yield Button("Vol+", id="mp-volup-btn", classes="op-btn mp-btn")
+                yield Static("", id="mp-vol", classes="mp-vol")
+                yield Static("Queue", id="mp-queue-head", classes="mp-section")
+                yield ListView(id="mp-queue", classes="mp-list")
+                yield Static("↵ play · x remove · p pause · < > prev/next · - = volume · ←→ seek", classes="mp-hints")
+
+    def on_mount(self):
+        self.set_interval(0.5, self._refresh)
+        self.call_after_refresh(self._refresh)
+        q = self.query_one("#mp-queue", ListView)
+        q.focus()
+
+    def _fmt_progress(self) -> str:
+        pos = getattr(self._player, "_mpv_last_pos", 0.0)
+        dur = getattr(self._player, "_mpv_last_dur", 0.0)
+        if dur <= 0:
+            return f"  {_fmt_ts(pos)} / --:--"
+        w = 18
+        frac = min(1.0, pos / dur)
+        bar = "█" * int(frac * w) + "░" * (w - int(frac * w))
+        return f"  {bar} {_fmt_ts(pos)} / {_fmt_ts(dur)} ({int(frac*100)}%)"
+
+    def _rebuild_queue(self):
+        batch = getattr(self._browser, "_autoplay_batch", None) or []
+        sig = (len(self._player._tracks), self._player._cur_idx, len(batch))
+        if sig == self._last_sig:
+            return
+        self._last_sig = sig
+        q = self.query_one("#mp-queue", ListView)
+        q.clear()
+        for i, (ep, _st) in enumerate(self._player._tracks):
+            mark = "▶" if i == self._player._cur_idx else " "
+            item = ListItem(Label(f" {mark} {ep.title[:48]}"))
+            item._mp_index = i
+            q.append(item)
+        for j, (ep, _st) in enumerate(batch):
+            item = ListItem(Label(f"  ↳ {ep.title[:48]}"))
+            item._batch_index = j
+            q.append(item)
+        if q.children:
+            q.index = 0
+
+    def _refresh(self):
+        if not self.is_mounted:
+            return
+        player = self._player
+        track = self.query_one("#mp-track", Static)
+        title = player.current_track_title or "…"
+        paused = "⏸" if getattr(player, "_mpv_paused", False) else "▶"
+        track.update(Text(f"  {paused} {title}", style=SA_B))
+        self.query_one("#mp-progress", Static).update(self._fmt_progress())
+        vol = getattr(self.app, "volume", 100)
+        self.query_one("#mp-vol", Static).update(Text(f"  Volume: {vol}%", style=SD))
+        self.query_one("#mp-pause-btn", Button).label = "⏸" if getattr(player, "_mpv_paused", False) else "⏯"
+        self._rebuild_queue()
+
+    def _remove_from_mpv(self, index: int):
+        try:
+            self._player.remove_at(index)
+        except Exception:
+            pass
+
+    def _remove_from_prefetch(self, index: int):
+        batch = getattr(self._browser, "_autoplay_batch", None)
+        if batch and 0 <= index < len(batch):
+            batch.pop(index)
+            self._last_sig = None
+            self._rebuild_queue()
+
+    def on_list_view_selected(self, event):
+        item = event.item
+        li = getattr(item, "_mp_index", None)
+        if li is not None:
+            n = len(self._player._tracks)
+            if not (0 <= li < n) or li == self._player._cur_idx:
+                return
+            try:
+                self._player.play_index(li)
+            except Exception:
+                pass
+            return
+        bj = getattr(item, "_batch_index", None)
+        if bj is not None:
+            try:
+                self._browser._play_prefetched_now(bj)
+            except Exception:
+                pass
+
+    def on_button_pressed(self, event: Button.Pressed):
+        bid = event.button.id
+        if bid == "mp-prev-btn":
+            self.action_prev_track()
+        elif bid == "mp-next-btn":
+            self.action_next_track()
+        elif bid == "mp-pause-btn":
+            self.action_pause()
+        elif bid == "mp-stop-btn":
+            self.action_stop()
+        elif bid == "mp-voldn-btn":
+            self.action_vol_down()
+        elif bid == "mp-volup-btn":
+            self.action_vol_up()
+
+    def action_pause(self):
+        self._player.pause_resume()
+
+    def action_next_track(self):
+        if self._player._cur_idx < len(self._player._tracks) - 1:
+            self._player.next_track()
+        else:
+            self._player.request_advance()
+
+    def action_prev_track(self):
+        self._player.prev_track()
+
+    def action_vol_down(self):
+        self._player.set_volume(-10)
+
+    def action_vol_up(self):
+        self._player.set_volume(10)
+
+    def action_seek_back(self):
+        self._player.seek_rel(-10)
+
+    def action_seek_fwd(self):
+        self._player.seek_rel(10)
+
+    def action_remove(self):
+        q = self.query_one("#mp-queue", ListView)
+        if not q.has_focus:
+            return
+        hl = q.highlighted_child
+        if hl is None:
+            return
+        mi = getattr(hl, "_mp_index", None)
+        if mi is not None:
+            self._remove_from_mpv(mi)
+            self._last_sig = None
+            return
+        bj = getattr(hl, "_batch_index", None)
+        if bj is not None:
+            self._remove_from_prefetch(bj)
+
+    def action_move_up(self):
+        q = self.query_one("#mp-queue", ListView)
+        target = q if q.has_focus else None
+        if target:
+            target.action_cursor_up()
+
+    def action_move_down(self):
+        q = self.query_one("#mp-queue", ListView)
+        target = q if q.has_focus else None
+        if target:
+            target.action_cursor_down()
+
+    def action_stop(self):
+        self._player.kill_current()
+        self.dismiss(None)
+
+    def action_close(self):
         self.dismiss(None)
 
 
@@ -1077,6 +1303,7 @@ class BrowserScreen(Screen):
         Binding("a", "toggle_audio", "Audio"),
         Binding("v", "toggle_quality", "Quality"),
         Binding("d", "download", "Download"),
+        Binding("e", "enqueue", "Queue"),
     ]
 
     def __init__(self):
@@ -1099,6 +1326,12 @@ class BrowserScreen(Screen):
         self._playback_episode = None
         self._playback_gen = 0
         self._playback_task = None
+        self._queue: list = []
+        self._playback_overlay = None
+        self._autoplay_batch: list = []
+        self._autoplay_fetched_for = ""
+        self._autoplay_fetching = False
+        self._played_vids: set = set()
 
     def compose(self) -> ComposeResult:
         with Container(classes="browser-root"):
@@ -1626,6 +1859,8 @@ class BrowserScreen(Screen):
         self._player.kill_current()
         self._playback_episodes = episodes or []
         self._playback_idx = current_idx
+        self._autoplay_batch = []
+        self._autoplay_fetched_for = ""
         has_next = current_idx + 1 < len(episodes or [])
         def _on_next():
             self._playback_idx += 1
@@ -1640,7 +1875,9 @@ class BrowserScreen(Screen):
             "Extracting Stream",
             kill_callback=_kill_and_mark,
             next_callback=_on_next if has_next else None,
+            browser=self,
         )
+        self._playback_overlay = overlay
         self._playback_episode = episode
         if isinstance(self.app.screen, OperationOverlay):
             self.app.pop_screen()
@@ -1701,15 +1938,220 @@ class BrowserScreen(Screen):
             self._playback_task.cancel()
             self._playback_task = None
         self._player.kill_current()
+        tracks = [(episode, stream)]
+        if getattr(episode, "site_name", "") == "ytmusic" and self._queue:
+            tracks.extend(self._queue)
+            self._queue = []
+        self._launch_mpv_tracks(tracks, overlay, gen)
+        if (tracks and getattr(tracks[0][0], "site_name", "") == "ytmusic"
+                and not isinstance(self.app.screen, MusicPlayerOverlay)):
+            self.app.push_screen(MusicPlayerOverlay(self, self._player))
+
+    def _launch_mpv_tracks(self, tracks, overlay, gen):
+        if self._playback_task:
+            self._playback_task.cancel()
+            self._playback_task = None
+        self._player.kill_current()
+        is_music = getattr(tracks[0][0], "site_name", "") == "ytmusic"
+        prefetch_cb = self._prefetch_next_batch if is_music else None
         async def _run():
-            await self._player._do_play(stream, episode, overlay)
+            await self._player._do_play(tracks, overlay, prefetch_cb=prefetch_cb)
             if gen != self._playback_gen:
                 return
+            natural = (bool(getattr(self._player, "_eof_reached", False))
+                       or bool(getattr(self._player, "_advance_requested", False)))
+            batch = self._autoplay_batch
+            if is_music:
+                overlay.add_log(f"Autoplay: ended, natural={natural}, batch={len(batch)}")
+            if natural and is_music:
+                # ymc waitingAtQueueEnd: give an in-flight prefetch time to land
+                wait_until = time.time() + 20.0
+                while not batch and time.time() < wait_until:
+                    still_busy = self._autoplay_fetching or getattr(self._player, "_prefetching", False)
+                    if not still_busy:
+                        break
+                    await asyncio.sleep(0.5)
+                    batch = self._autoplay_batch
+            if natural and batch and is_music:
+                overlay.add_log(f"Autoplay: relaunching with {len(batch)} tracks")
+                self._autoplay_batch = []
+                self._playback_gen += 1
+                self._launch_mpv_tracks(batch, overlay, self._playback_gen)
+                return
             try:
-                self.app.call_from_thread(overlay.show_ended)
+                overlay.show_ended()
             except Exception:
                 pass
         self._playback_task = asyncio.create_task(_run())
+
+    def _play_prefetched_now(self, batch_index: int):
+        """Play a prefetched (autoplay) track immediately, keeping the rest
+        of the batch in the queue. Relaunches mpv with the selected track
+        first — per-track audio-file options require a fresh instance."""
+        batch = self._autoplay_batch
+        if not (0 <= batch_index < len(batch)):
+            return
+        selected = batch.pop(batch_index)
+        self._autoplay_batch = batch
+        overlay = self._playback_overlay
+        if overlay is None:
+            return
+        self._player.kill_current()
+        self._playback_gen += 1
+        self._launch_mpv_tracks([selected] + batch, overlay, self._playback_gen)
+
+    async def _prefetch_next_batch(self, episode):
+        """Called by the player near the end of the playlist: fetch the next
+        Up Next batch from YouTube Music and resolve it (full quality)."""
+        if self._autoplay_fetching:
+            return
+        if getattr(episode, "site_name", "") != "ytmusic":
+            return
+        vid = (episode.data or {}).get("video_id", "")
+        if not vid or vid == self._autoplay_fetched_for:
+            return
+        self._autoplay_fetching = True
+        self._autoplay_fetched_for = vid
+        kind = (episode.data or {}).get("kind", "song")
+        try:
+            try:
+                self._playback_overlay_log(f"Autoplay: fetching Up Next for {vid[:10]}…")
+            except Exception:
+                pass
+            batch = await asyncio.to_thread(self._fetch_suggestions, vid, kind)
+            if batch:
+                self._autoplay_batch = batch
+                try:
+                    self._update_content(f"Autoplay ready — {len(batch)} more track{'s' if len(batch) != 1 else ''}")
+                    self._playback_overlay_log(f"Autoplay: batch ready ({len(batch)} tracks)")
+                except Exception:
+                    pass
+            else:
+                try:
+                    self._playback_overlay_log("Autoplay: no suggestions found")
+                except Exception:
+                    pass
+        finally:
+            self._autoplay_fetching = False
+
+    def _playback_overlay_log(self, text: str):
+        """Write a line into the visible playback overlay log."""
+        scr = self.app.screen
+        if isinstance(scr, OperationOverlay):
+            scr.add_log(text)
+        else:
+            self._update_content(text)
+
+    def _fetch_suggestions(self, video_id: str, kind: str = "song") -> list:
+        """Up Next via ytmusicapi, resolved to full-quality direct streams.
+        kind='song' -> album-art tracks; kind='video' -> the music videos."""
+        from ytmusicapi import YTMusic
+        from anime_watch.models import Episode
+        from anime_watch.providers import extract_stream
+        try:
+            ym = YTMusic()
+            panel = ym.get_watch_playlist(video_id)
+        except Exception:
+            return []
+        tracks = panel.get("tracks") or []
+        out = []
+        for t in tracks:
+            tvid = t.get("videoId")
+            if not tvid or tvid == video_id or tvid in self._played_vids:
+                continue
+            title = t.get("title") or ""
+            artists = t.get("artists") or []
+            artist = (artists[0].get("name") if artists else "") or ""
+            label = f"{title} — {artist}" if artist else title
+            if kind == "video":
+                ep = Episode(
+                    title=f"▶ {label} (Video)",
+                    url=f"https://music.youtube.com/watch?v={tvid}",
+                    number="1v",
+                    site_name="ytmusic",
+                    anime_name=label,
+                    data={"kind": "video", "video_id": tvid},
+                )
+            else:
+                ep = Episode(
+                    title=f"♫ {label}",
+                    url=f"https://music.youtube.com/watch?v={tvid}",
+                    number="1",
+                    site_name="ytmusic",
+                    anime_name=label,
+                    data={"kind": "song", "video_id": tvid},
+                )
+            try:
+                stream = extract_stream(ep, self.app.audio_pref, self.app.quality_pref)
+            except Exception:
+                stream = None
+            if stream and stream.url:
+                out.append((ep, stream))
+                self._played_vids.add(tvid)
+            if len(out) >= 5:
+                break
+        return out
+
+    def action_enqueue(self):
+        if getattr(self.app, "search_category", "") != "music":
+            self._update_content("Queue is music-only")
+            return
+        typ, item = self._get_current_item()
+        if typ == "episode":
+            self._run_enqueue([item])
+        elif typ == "result":
+            self._update_content(f"Loading queue entry: {item.title[:40]}…")
+            self._run_enqueue_result(item)
+        else:
+            self._update_content("Select a track to enqueue.")
+
+    @work(thread=True, exclusive=False)
+    def _run_enqueue(self, eps: list):
+        from anime_watch.providers import extract_stream
+        added = 0
+        for ep in eps:
+            try:
+                stream = extract_stream(ep, self.app.audio_pref, self.app.quality_pref)
+            except Exception:
+                stream = None
+            if stream and stream.url:
+                self._queue.append((ep, stream))
+                added += 1
+        self.app.call_from_thread(self._update_content,
+            f"Queued {added} track{'s' if added != 1 else ''} — {len(self._queue)} in queue" if added else
+            "Could not extract stream to enqueue")
+
+    @work(thread=True, exclusive=False)
+    def _run_enqueue_result(self, result):
+        from anime_watch.providers import get_episodes, extract_stream
+        try:
+            eps = get_episodes(result)
+        except Exception:
+            eps = []
+        if not eps:
+            self.app.call_from_thread(self._update_content, "No tracks found to enqueue")
+            return
+        audio = None
+        for ep in eps:
+            kind = (ep.data or {}).get("kind", "")
+            if kind == "song" or str(ep.number).endswith("a"):
+                audio = ep
+                break
+        if audio is None and eps:
+            audio = eps[0]
+        if audio is None:
+            self.app.call_from_thread(self._update_content, "No tracks found to enqueue")
+            return
+        try:
+            stream = extract_stream(audio, self.app.audio_pref, self.app.quality_pref)
+        except Exception:
+            stream = None
+        if not (stream and stream.url):
+            self.app.call_from_thread(self._update_content, "Could not extract stream to enqueue")
+            return
+        self._queue.append((audio, stream))
+        self.app.call_from_thread(self._update_content,
+            f"Queued: {audio.title[:40]} — {len(self._queue)} in queue")
 
     @work(thread=True)
     def _run_continue_watching_episodes(self, episode):
@@ -1833,10 +2275,13 @@ class BrowserScreen(Screen):
                     ("esc", "Back"), ("q", "Quit"),
                 ])
         elif self.mode == "results":
-            footer.set_hints([
+            hints = [
                 ("↑↓", "Navigate"), ("/", "Search"), ("↵", "Episodes"),
                 ("s", "Sidebar"), ("L", "Library"), ("h", "History"), ("q", "Quit"),
-            ])
+            ]
+            if cat == "music":
+                hints.insert(3, ("e", "Enqueue"))
+            footer.set_hints(hints)
         elif self.mode == "servers":
             footer.set_hints([
                 ("↑↓", "Navigate"), ("↵", "Select"), ("d", "Download"),
@@ -1844,6 +2289,8 @@ class BrowserScreen(Screen):
             ])
         elif self.mode == "episodes":
             hints = [("↑↓", "Navigate"), ("↵", "Play"), ("/", "Ep #"), ("d", "Download")]
+            if cat == "music":
+                hints.append(("e", "Queue"))
             try:
                 rl = self.query_one("#results-list", ResultsPanel)
                 if rl.category_count > 1:
