@@ -1,5 +1,6 @@
 import hashlib
 import os
+from typing import Optional
 import re
 import threading
 import urllib.request
