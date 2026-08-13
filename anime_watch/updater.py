@@ -3,6 +3,7 @@ import os
 import re
 import threading
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 _DESKTOP_REPO = "Eskoxx/Freedom"
 _ANDROID_REPO = "Eskoxx/Freedom-Android"
@@ -10,6 +11,22 @@ _ANDROID_ASSET_PREFIX = "app/src/main/assets/anime_watch"
 _ANDROID_DATA_DIR = "/data/data/io.freedom"
 
 _UA = "Freedom/2.0 (+auto-update)"
+
+# Parallel downloads: most updates touch 1-3 files, but big pushes (vendored
+# trees, fresh installs) sync dozens — fetching them one at a time is the
+# bottleneck. Verification stays per-file (digest check before write).
+_UPDATE_WORKERS = 5
+
+
+def _download_verified(url: str, digest: str, timeout: float) -> Optional[bytes]:
+    """Download a file and return it only if its sha256 matches the manifest."""
+    try:
+        data = _http_get(url, timeout=timeout)
+    except Exception:
+        return None
+    if hashlib.sha256(data).hexdigest() != digest:
+        return None
+    return data
 
 
 def _is_android() -> bool:
@@ -99,22 +116,31 @@ def _fetch_manifest(timeout: float = 10.0) -> dict[str, str]:
 def _apply_manifest(manifest: dict[str, str]) -> int:
     pkg = _pkg_dir()
     changed = 0
+    todo = []
     for rel, digest in manifest.items():
         dest = os.path.join(pkg, rel)
         if os.path.isfile(dest) and _sha256_file(dest) == digest:
             continue
-        try:
-            data = _http_get(_raw_url(rel), timeout=30)
-        except Exception:
-            continue
-        if hashlib.sha256(data).hexdigest() != digest:
-            continue
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        tmp = dest + ".tmp"
-        with open(tmp, "wb") as f:
-            f.write(data)
-        os.replace(tmp, dest)
-        changed += 1
+        todo.append((rel, digest, dest))
+
+    if todo:
+        def _fetch(item):
+            rel, digest, dest = item
+            data = _download_verified(_raw_url(rel), digest, 30)
+            if data is None:
+                return None
+            return (dest, data)
+        with ThreadPoolExecutor(max_workers=_UPDATE_WORKERS) as pool:
+            for result in pool.map(_fetch, todo):
+                if result is None:
+                    continue
+                dest, data = result
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                tmp = dest + ".tmp"
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                os.replace(tmp, dest)
+                changed += 1
 
     keep = set(manifest.keys()) | {".update-version", ".update-pending", ".update-manifest"}
     for root, _dirs, files in os.walk(pkg):
@@ -224,22 +250,31 @@ def _apply_providers_manifest(manifest: dict[str, str]) -> int:
     pkg = _providers_dir()
     os.makedirs(pkg, exist_ok=True)
     changed = 0
+    todo = []
     for rel, digest in manifest.items():
         dest = os.path.join(pkg, rel)
         if os.path.isfile(dest) and _sha256_file(dest) == digest:
             continue
-        try:
-            data = _http_get(_providers_raw_url(rel), timeout=30)
-        except Exception:
-            continue
-        if hashlib.sha256(data).hexdigest() != digest:
-            continue
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        tmp = dest + ".tmp"
-        with open(tmp, "wb") as f:
-            f.write(data)
-        os.replace(tmp, dest)
-        changed += 1
+        todo.append((rel, digest, dest))
+
+    if todo:
+        def _fetch(item):
+            rel, digest, dest = item
+            data = _download_verified(_providers_raw_url(rel), digest, 30)
+            if data is None:
+                return None
+            return (dest, data)
+        with ThreadPoolExecutor(max_workers=_UPDATE_WORKERS) as pool:
+            for result in pool.map(_fetch, todo):
+                if result is None:
+                    continue
+                dest, data = result
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                tmp = dest + ".tmp"
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                os.replace(tmp, dest)
+                changed += 1
     keep = set(manifest.keys()) | {".providers-version"}
     for root, _dirs, files in os.walk(pkg):
         if "__pycache__" in root:
@@ -270,16 +305,22 @@ def apply_providers_update_sync(remote_text: str, timeout: float = 30.0, progres
     entries = sorted(manifest.items())
     total = len(entries)
     staged: list[tuple[str, bytes]] = []
-    for i, (rel, digest) in enumerate(entries, start=1):
-        try:
-            data = _http_get(_providers_raw_url(rel), timeout)
-        except Exception:
-            return False
-        if hashlib.sha256(data).hexdigest() != digest:
-            return False
-        staged.append((rel, data))
-        if progress_cb:
-            progress_cb(i, total, rel)
+
+    def _fetch(item):
+        rel, digest = item
+        data = _download_verified(_providers_raw_url(rel), digest, timeout)
+        if data is None:
+            return None
+        return (rel, data)
+
+    if total:
+        with ThreadPoolExecutor(max_workers=_UPDATE_WORKERS) as pool:
+            for i, result in enumerate(pool.map(_fetch, entries), start=1):
+                if result is None:
+                    return False
+                staged.append(result)
+                if progress_cb:
+                    progress_cb(i, total, result[0])
     pkg = _providers_dir()
     for rel, data in staged:
         dest = os.path.join(pkg, rel)
