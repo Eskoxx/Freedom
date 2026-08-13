@@ -31,60 +31,42 @@ class TorrentEngine:
         save_path: str,
         on_progress: Optional[callable] = None,
     ) -> None:
-        """Tee webtorrent stdout to both mpv (pipe) and a file on disk."""
-        import os as _os
-        r_fd, w_fd = _os.pipe()
-
-        webtorrent = await asyncio.create_subprocess_exec(
-            "webtorrent", "download", magnet,
-            "--stdout", "--quiet",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            preexec_fn=os.setsid,
+        """Download to disk (webtorrent HTTP server) while mpv plays the URL."""
+        import threading as _threading
+        dest_dir = os.path.dirname(save_path) or "."
+        os.makedirs(dest_dir, exist_ok=True)
+        done_evt = _threading.Event()
+        url = self.download_to_dir_sync(
+            magnet, info_hash, dest_dir, on_progress, on_done=done_evt.set,
         )
-        self._processes[info_hash] = webtorrent
-
-        save_dir = _os.path.dirname(save_path) or "."
-        _os.makedirs(save_dir, exist_ok=True)
-        save_file = open(save_path, "wb")
-
-        async def tee_output():
-            try:
-                while True:
-                    chunk = await webtorrent.stdout.read(65536)
-                    if not chunk:
-                        break
-                    save_file.write(chunk)
-                    save_file.flush()
-                    _os.write(w_fd, chunk)
-            finally:
-                save_file.close()
-                try:
-                    _os.close(w_fd)
-                except OSError:
-                    pass
-
-        tee_task = asyncio.create_task(tee_output())
+        if not url:
+            self.stop(info_hash)
+            return
 
         mpv = await asyncio.create_subprocess_exec(
             "mpv", "--no-terminal", "--osd-level=0", "--vo=gpu",
             "--cache=yes", "--cache-secs=30",
-            "-",
-            stdin=r_fd,
+            "--demuxer-max-bytes=128MiB", url,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
-        )
-        _os.close(r_fd)
-
-        stderr_task = asyncio.create_task(
-            self._pipe_stderr(webtorrent.stderr, info_hash, on_progress)
         )
 
         await mpv.wait()
         self.stop(info_hash)
-        tee_task.cancel()
-        stderr_task.cancel()
-        self._close_stderr(webtorrent)
+        # Let webtorrent finish writing the remaining pieces (if it was still
+        # downloading when the player closed) so the saved copy is complete.
+        done_evt.wait(timeout=30)
+
+        largest = max(
+            (f for f in self._find_video_files(dest_dir) if os.path.exists(f)),
+            key=os.path.getsize,
+            default=None,
+        )
+        if largest and os.path.abspath(largest) != os.path.abspath(save_path):
+            try:
+                os.replace(largest, save_path)
+            except OSError:
+                pass
 
     async def stream_pipe(
         self,
@@ -92,37 +74,25 @@ class TorrentEngine:
         info_hash: str,
         on_progress: Optional[callable] = None,
     ) -> None:
+        """Watch-only: download to a temp dir (disk) and play via the HTTP URL."""
         import os
-        r_fd, w_fd = os.pipe()
-
-        webtorrent = await asyncio.create_subprocess_exec(
-            "webtorrent", "download", magnet,
-            "--stdout", "--quiet",
-            stdout=w_fd,
-            stderr=asyncio.subprocess.PIPE,
-            preexec_fn=os.setsid,
-        )
-        os.close(w_fd)
-        self._processes[info_hash] = webtorrent
+        tmpdir = tempfile.mkdtemp(prefix=TMPDIR_PREFIX)
+        self._tmpdirs[info_hash] = tmpdir
+        url = self.download_to_dir_sync(magnet, info_hash, tmpdir, on_progress)
+        if not url:
+            self.stop(info_hash)
+            return
 
         mpv = await asyncio.create_subprocess_exec(
             "mpv", "--no-terminal", "--osd-level=0", "--vo=gpu",
             "--cache=yes", "--cache-secs=30",
-            "-",
-            stdin=r_fd,
+            "--demuxer-max-bytes=128MiB", url,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
-        )
-        os.close(r_fd)
-
-        stderr_task = asyncio.create_task(
-            self._pipe_stderr(webtorrent.stderr, info_hash, on_progress)
         )
 
         await mpv.wait()
         self.stop(info_hash)
-        stderr_task.cancel()
-        self._close_stderr(webtorrent)
 
     async def download_to_dir(
         self,
@@ -180,15 +150,54 @@ class TorrentEngine:
             _time.sleep(0.5)
         return False
 
-    def _construct_webtorrent_url(self, info_hash: str, dest_dir: str) -> Optional[str]:
+    def _discover_webtorrent_port(self, info_hash: str) -> Optional[int]:
+        """Find the HTTP port of the webtorrent process serving this torrent.
+
+        The CLI binds port 8000 by default but silently takes a random port on
+        EADDRINUSE, and 6.x never prints the URL in download mode — so scan the
+        common range for a server that answers the /webtorrent/<hash> page.
+        """
+        import urllib.request
+        import time as _time
+        for port in range(8000, 8100):
+            url = f"http://localhost:{port}/webtorrent/{info_hash}"
+            try:
+                req = urllib.request.Request(url, method="HEAD")
+                with urllib.request.urlopen(req, timeout=1) as resp:
+                    if 200 <= getattr(resp, "status", 200) < 400:
+                        return port
+            except Exception:
+                pass
+        return None
+
+    def _construct_webtorrent_url(self, info_hash: str, dest_dir: str, base_url: Optional[str] = None) -> Optional[str]:
         import urllib.parse
         videos = self._find_video_files(dest_dir)
         if not videos:
             return None
         largest = max(videos, key=lambda f: os.path.getsize(f) if os.path.exists(f) else 0)
+        base = (base_url or "http://localhost:8000/").rstrip("/")
         rel = os.path.relpath(largest, dest_dir)
-        encoded = urllib.parse.quote(rel, safe="/")
-        return f"http://localhost:8000/webtorrent/{info_hash}/{encoded}"
+
+        # webtorrent's HTTP server matches requests against the IN-TORRENT
+        # file path, while the chunk store writes to disk under
+        # <out>/<torrent-name>/<in-torrent path>. Try disk-relative, the
+        # stripped form (drop the torrent-name prefix) and the bare filename.
+        candidates = [rel]
+        first, sep, rest = rel.partition(os.sep)
+        if sep:
+            candidates.append(rest)
+        candidates.append(os.path.basename(rel))
+        seen = set()
+        for cand in candidates:
+            if cand in seen:
+                continue
+            seen.add(cand)
+            encoded = urllib.parse.quote(cand, safe="/")
+            url = f"{base}/webtorrent/{info_hash}/{encoded}"
+            if self._wait_until_serving(url, timeout=4):
+                return url
+        return None
 
     def download_to_dir_sync(
         self,
@@ -196,6 +205,8 @@ class TorrentEngine:
         info_hash: str,
         dest_dir: str,
         on_progress: Optional[callable] = None,
+        track: bool = True,
+        on_done: Optional[callable] = None,
     ) -> Optional[str]:
         import subprocess as _subprocess
         import threading as _threading
@@ -203,32 +214,48 @@ class TorrentEngine:
 
         os.makedirs(dest_dir, exist_ok=True)
 
+        # Hint a stable port so concurrent torrents don't both fight for 8000;
+        # if taken the CLI picks a random one and we discover it below.
+        port_hint = 8000 + int(info_hash[:2], 16) % 100
+
+        # --keep-seeding: webtorrent-cli exits on download completion when
+        # nobody has connected to its HTTP server yet, killing the stream
+        # URL right before the player connects.
+        # --download-limit: cap the rate so in-flight piece buffers and the
+        # page-cache/dirty-page pileup from a GB-scale download stay bounded
+        # on low-RAM machines (8GB here) instead of OOM-killing the player.
         proc = _subprocess.Popen(
-            ["webtorrent", "download", magnet, "--out", dest_dir],
+            ["webtorrent", "download", magnet, "--out", dest_dir, "--keep-seeding",
+             "--port", str(port_hint),
+             "--download-limit", "30000", "--upload-limit", "2000"],
             stdout=_subprocess.PIPE,
             stderr=_subprocess.PIPE,
             preexec_fn=os.setsid,
         )
-        self._processes[info_hash] = proc
+        if track:
+            self._processes[info_hash] = proc
 
-        server_url: Optional[str] = None
+        base_url: Optional[str] = None
         stop_event = _threading.Event()
 
         def _read_stdout():
-            nonlocal server_url
+            nonlocal base_url
             try:
                 for line in iter(proc.stdout.readline, b""):
                     if stop_event.is_set():
                         break
                     # strip chalk ANSI escapes (webtorrent emits them even on a pipe)
                     text = _ANSI_RE.sub("", line.decode(errors="replace"))
-                    if server_url is None and "Server running at:" in text:
+                    if base_url is None and "Server running at:" in text:
                         idx = text.index("Server running at:")
                         candidate = text[idx + len("Server running at:"):].strip()
                         if candidate.startswith("http"):
-                            server_url = candidate
+                            base_url = candidate
             except ValueError:
                 pass
+            # stdout EOF = webtorrent exited; never wait forever for completion.
+            if on_done:
+                on_done()
 
         stdout_reader = _threading.Thread(target=_read_stdout, daemon=True)
         stdout_reader.start()
@@ -243,40 +270,65 @@ class TorrentEngine:
                         msg = self._parse_progress_sync(text)
                         if msg:
                             on_progress(msg)
+                            if on_done and msg.startswith("100%"):
+                                on_done()
             except ValueError:
                 pass
 
         stderr_reader = _threading.Thread(target=_read_stderr, daemon=True)
         stderr_reader.start()
 
+        # Wait for metadata + first bytes on disk. webtorrent-cli 6.x never
+        # prints the server URL in download mode, so only require the torrent
+        # folder to appear (its store files are created once metadata
+        # resolves), then construct the URL ourselves.
         waited = 0
+        limit = 120
+        while waited < limit and not self._find_video_files(dest_dir) and not stop_event.is_set():
+            _time.sleep(1)
+            waited += 1
+
+        if not self._find_video_files(dest_dir):
+            stop_event.set()
+            self._abort_proc(proc)
+            return None
+
+        # If the CLI DID print a full stream URL, prefer it.
+        if base_url and "/webtorrent/" in base_url:
+            if self._wait_until_serving(base_url, timeout=15):
+                return base_url
+
+        # Otherwise locate the server's actual port and construct the URL
+        # (tries disk-relative, name-stripped and basename forms until one
+        # answers).
+        port = self._discover_webtorrent_port(info_hash)
+        if port is None:
+            stop_event.set()
+            self._abort_proc(proc)
+            return None
+        file_url = self._construct_webtorrent_url(
+            info_hash, dest_dir, base_url=f"http://localhost:{port}/")
+        if not file_url:
+            stop_event.set()
+            self._abort_proc(proc)
+            return None
+        return file_url
+
+    @staticmethod
+    def _abort_proc(proc) -> None:
+        """Kill a webtorrent process and close its pipes after a give-up."""
         try:
-            while waited < 30 and server_url is None and not stop_event.is_set():
-                if server_url is None:
-                    constructed = self._construct_webtorrent_url(info_hash, dest_dir)
-                    if constructed:
-                        server_url = constructed
-                _time.sleep(0.5)
-                waited += 0.5
-        finally:
-            if server_url is None:
-                stop_event.set()
-                try:
-                    proc.stdout.close()
-                except OSError:
-                    pass
-                try:
-                    proc.stderr.close()
-                except OSError:
-                    pass
-        # Confirm the webtorrent HTTP server actually serves this URL before handing it
-        # to mpv (a file existing on disk is not proof the port is up). If the parsed
-        # URL does not answer, try the constructed /webtorrent/<hash>/<path> fallback.
-        if server_url and not self._wait_until_serving(server_url, timeout=10):
-            fallback = self._construct_webtorrent_url(info_hash, dest_dir)
-            if fallback and fallback != server_url and self._wait_until_serving(fallback, timeout=5):
-                server_url = fallback
-        return server_url
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            proc.stdout.close()
+        except OSError:
+            pass
+        try:
+            proc.stderr.close()
+        except OSError:
+            pass
 
     def _parse_progress_sync(self, text: str) -> Optional[str]:
         m = re.search(r'(\d+\.?\d*)\s*%', text)
