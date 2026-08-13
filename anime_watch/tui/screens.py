@@ -254,7 +254,7 @@ def _fmt_age(seconds: float) -> str:
 class CommunityOverlay(Screen):
     """One-time invite to join the project's Telegram community."""
 
-    COMMUNITY_URL = "https://t.me/+u2X2c3h0E304NzA1"
+    COMMUNITY_URL = "https://t.me/+9pd7FaXTnYYzY2Zl"
     MARKER = os.path.expanduser("~/.config/anime-watch/community_seen")
 
     BINDINGS = [
@@ -278,9 +278,7 @@ class CommunityOverlay(Screen):
                 with Horizontal(classes="splash-hints-row"):
                     yield Button("join", id="cm-join-btn", classes="hint-btn")
                     yield Static(" · ", classes="hint-text")
-                    yield Button("later", id="cm-later-btn", classes="hint-btn")
-                    yield Static(" · ", classes="hint-text")
-                    yield Button("don't show again", id="cm-hide-btn", classes="hint-btn")
+                    yield Button("maybe later", id="cm-later-btn", classes="hint-btn")
                     yield Static(" · ", classes="hint-text")
                     yield Static("esc", classes="hint-key")
                     yield Static(" close", classes="hint-text")
@@ -319,9 +317,6 @@ class CommunityOverlay(Screen):
             self._open_link()
             self.app.pop_screen()
         elif event.button.id == "cm-later-btn":
-            self.app.pop_screen()
-        elif event.button.id == "cm-hide-btn":
-            self._mark_seen()
             self.app.pop_screen()
 
     def on_mount(self):
