@@ -2104,7 +2104,7 @@ class BrowserScreen(Screen):
         # Initial queue: 10 suggestions. Afterwards every queue advance
         # appends ONE more at the end, keeping the Up Next list growing.
         limit = 1 if self._autoplay_batch else 10
-        skip_ids = {ep.data.get("video_id") for ep, _ in self._autoplay_batch if (ep.data or {}).get("video_id")}
+        skip_ids = {ep.data.get("video_id") for ep in self._autoplay_batch if (ep.data or {}).get("video_id")}
         try:
             try:
                 self._playback_overlay_log(f"Autoplay: fetching Up Next for {vid[:10]}…")
