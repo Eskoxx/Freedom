@@ -2125,8 +2125,12 @@ class BrowserScreen(Screen):
         batch = self._autoplay_batch
         if not (0 <= batch_index < len(batch)):
             return
-        selected = batch.pop(batch_index)
-        self._autoplay_batch = batch
+        selected = batch[batch_index]
+        # Wrap the queue around the picked item: it plays now, followed by
+        # the items AFTER it in queue order, then the items before it — so
+        # picking 4 out of 1,2,3,4,5,6 plays 4,5,6,…1,2,3 instead of
+        # replaying 1,2,3 right after 4.
+        ordered = batch[batch_index + 1:] + batch[:batch_index]
         overlay = self._playback_overlay
         if overlay is None:
             return
@@ -2144,7 +2148,7 @@ class BrowserScreen(Screen):
             return
         self._player.kill_current()
         self._playback_gen += 1
-        rest = [(ep, self._autoplay_streams.get((ep.data or {}).get("video_id"))) for ep in batch]
+        rest = [(ep, self._autoplay_streams.get((ep.data or {}).get("video_id"))) for ep in ordered]
         rest = [t for t in rest if t[1] and t[1].url]
         play_tracks = [(selected, stream)] + rest
         # These are now queued in the player — remove them from the batch so
