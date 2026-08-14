@@ -1097,7 +1097,7 @@ class MusicPlayerOverlay(Screen):
             item = ListItem(Label(f" {mark} {ep.title[:48]}"))
             item._mp_index = i
             q.append(item)
-        for j, (ep, _st) in enumerate(batch):
+        for j, ep in enumerate(batch):
             item = ListItem(Label(f"  ↳ {ep.title[:48]}"))
             item._batch_index = j
             q.append(item)
