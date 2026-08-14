@@ -2016,13 +2016,15 @@ class BrowserScreen(Screen):
             if natural and batch and is_music:
                 overlay.add_log(f"Autoplay: relaunching with {len(batch)} tracks")
                 await self._resolve_pending()
-                tracks = [(ep, self._autoplay_streams.get((ep.data or {}).get("video_id")))
-                          for ep in batch]
-                tracks = [t for t in tracks if t[1] and t[1].url]
+                # NOTE: must NOT reassign the closure var `tracks` here — that
+                # makes it local to _run and breaks the first _do_play call.
+                rel_tracks = [(ep, self._autoplay_streams.get((ep.data or {}).get("video_id")))
+                              for ep in batch]
+                rel_tracks = [t for t in rel_tracks if t[1] and t[1].url]
                 self._autoplay_batch = []
                 self._playback_gen += 1
-                if tracks:
-                    self._launch_mpv_tracks(tracks, overlay, self._playback_gen)
+                if rel_tracks:
+                    self._launch_mpv_tracks(rel_tracks, overlay, self._playback_gen)
                 return
             try:
                 overlay.show_ended()
