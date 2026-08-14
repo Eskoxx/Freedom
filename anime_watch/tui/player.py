@@ -90,6 +90,7 @@ class PlaybackHandler:
         self._update_footer = update_footer
         self._current_proc = None
         self._ipc_writer = None
+        self._ipc_gen = 0
         self._ipc_tasks: list[asyncio.Task] = []
         self._tracks: list[tuple[Episode, StreamSource]] = []
         self._cur_idx = -1
@@ -314,7 +315,8 @@ class PlaybackHandler:
         if extra:
             args.extend(extra)
 
-        ipc_path = f"/tmp/aw-mpv-{os.getpid()}.sock"
+        self._ipc_gen += 1
+        ipc_path = f"/tmp/aw-mpv-{os.getpid()}-{self._ipc_gen}.sock"
         args.append(f"--input-ipc-server={ipc_path}")
 
         headers = getattr(stream, 'headers', None)
@@ -401,6 +403,7 @@ class PlaybackHandler:
                     await self._ipc_writer.wait_closed()
                 except Exception:
                     pass
+                self._ipc_writer = None
             try:
                 os.unlink(ipc_path)
             except OSError:
@@ -496,7 +499,8 @@ class PlaybackHandler:
                 "--vo=gpu", "--ontop", "--cache=yes", "--cache-secs=30",
                 "--cache-pause-initial=yes", "--keep-open=yes",
                 f"--volume={getattr(self.app, 'volume', 100)}"]
-        ipc_path = f"/tmp/aw-mpv-{os.getpid()}.sock"
+        self._ipc_gen += 1
+        ipc_path = f"/tmp/aw-mpv-{os.getpid()}-{self._ipc_gen}.sock"
         args.append(f"--input-ipc-server={ipc_path}")
 
         input_conf = _write_extra_input_conf()
@@ -581,6 +585,7 @@ class PlaybackHandler:
                     await self._ipc_writer.wait_closed()
                 except Exception:
                     pass
+                self._ipc_writer = None
             try:
                 os.unlink(ipc_path)
             except OSError:

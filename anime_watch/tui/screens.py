@@ -1036,6 +1036,7 @@ class MusicPlayerOverlay(Screen):
         Binding("x", "remove", "Remove"),
         Binding("j", "move_down", ""),
         Binding("k", "move_up", ""),
+        Binding("z", "toggle_autoplay_mode", "Split"),
     ]
 
     def __init__(self, browser, player: PlaybackHandler):
@@ -1111,12 +1112,39 @@ class MusicPlayerOverlay(Screen):
         track = self.query_one("#mp-track", Static)
         title = player.current_track_title or "…"
         paused = "⏸" if getattr(player, "_mpv_paused", False) else "▶"
-        track.update(Text(f"  {paused} {title}", style=SA_B))
+        try:
+            from anime_watch.tui.player import load_settings as _ls
+            _mode = "SPLIT" if _ls().get("yt_autoplay_split", False) else "TITLE"
+        except Exception:
+            _mode = ""
+        suffix = f"  [{_mode}]" if _mode else ""
+        track.update(Text(f"  {paused} {title}{suffix}", style=SA_B))
         self.query_one("#mp-progress", Static).update(self._fmt_progress())
         vol = getattr(self.app, "volume", 100)
         self.query_one("#mp-vol", Static).update(Text(f"  Volume: {vol}%", style=SD))
         self.query_one("#mp-pause-btn", Button).label = "⏸" if getattr(player, "_mpv_paused", False) else "⏯"
         self._rebuild_queue()
+
+    def action_toggle_autoplay_mode(self):
+        """Flip between suggestion mechanism 1 (whole-title search) and
+        mechanism 2 (character x song cross-product searches)."""
+        try:
+            from anime_watch.tui.player import load_settings, save_settings
+            st = load_settings()
+            cur = st.get("yt_autoplay_split", False)
+            st["yt_autoplay_split"] = not cur
+            save_settings(st)
+            mode = "SPLIT (character x song)" if not cur else "TITLE"
+            try:
+                self.app.notify(f"Autoplay mode: {mode}", title="Autoplay", timeout=3)
+            except Exception:
+                pass
+            try:
+                self._browser._update_content(f"Autoplay mode: {mode}")
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _remove_from_mpv(self, index: int):
         try:
@@ -1996,7 +2024,20 @@ class BrowserScreen(Screen):
         prefetch_cb = self._prefetch_next_batch if is_music else None
         self._player._on_advance_cb = self._on_track_advance if is_music else None
         async def _run():
-            await self._player._do_play(tracks, overlay, prefetch_cb=prefetch_cb)
+            try:
+                await self._player._do_play(tracks, overlay, prefetch_cb=prefetch_cb)
+            except Exception:
+                # A playback task exception must never kill the app — log and
+                # move on (e.g. mpv died unexpectedly on a device).
+                try:
+                    overlay.add_log("Playback ended unexpectedly")
+                except Exception:
+                    pass
+                try:
+                    self._update_content("Playback ended")
+                except Exception:
+                    pass
+                return
             if gen != self._playback_gen:
                 return
             natural = (bool(getattr(self._player, "_eof_reached", False))
@@ -2015,16 +2056,34 @@ class BrowserScreen(Screen):
                     batch = self._autoplay_batch
             if natural and batch and is_music:
                 overlay.add_log(f"Autoplay: relaunching with {len(batch)} tracks")
-                await self._resolve_pending()
                 # NOTE: must NOT reassign the closure var `tracks` here — that
                 # makes it local to _run and breaks the first _do_play call.
-                rel_tracks = [(ep, self._autoplay_streams.get((ep.data or {}).get("video_id")))
-                              for ep in batch]
-                rel_tracks = [t for t in rel_tracks if t[1] and t[1].url]
-                self._autoplay_batch = []
-                self._playback_gen += 1
+                def _ready():
+                    return [(ep, self._autoplay_streams.get((ep.data or {}).get("video_id")))
+                            for ep in batch if (self._autoplay_streams.get((ep.data or {}).get("video_id")) or {}).url]
+                await self._resolve_pending()
+                rel_tracks = _ready()
+                # The resolution lottery can come up empty — retry a few
+                # rounds before giving up; never lose the queued batch.
+                rounds = 0
+                while not rel_tracks and rounds < 4:
+                    await asyncio.sleep(2)
+                    await self._resolve_pending()
+                    rel_tracks = _ready()
+                    rounds += 1
                 if rel_tracks:
+                    resolved_vids = {(ep.data or {}).get("video_id") for ep, _ in rel_tracks}
+                    # Keep unresolved entries queued — only consume what plays.
+                    self._autoplay_batch = [ep for ep in batch
+                                            if (ep.data or {}).get("video_id") not in resolved_vids]
+                    self._playback_gen += 1
                     self._launch_mpv_tracks(rel_tracks, overlay, self._playback_gen)
+                    return
+                overlay.add_log("Autoplay: no streams resolved — queue kept for manual play")
+                try:
+                    self._update_content("Autoplay: streams still resolving…")
+                except Exception:
+                    pass
                 return
             try:
                 overlay.show_ended()
@@ -2043,7 +2102,8 @@ class BrowserScreen(Screen):
             prov = CONFIGURED_PROVIDERS.get("youtube") or CONFIGURED_PROVIDERS.get("ytmusic")
             if prov is None:
                 return
-            self._resolve_many(list(self._autoplay_batch), prov.resolve_suggestion)
+            await asyncio.to_thread(
+                self._resolve_many, list(self._autoplay_batch), prov.resolve_suggestion)
         except Exception:
             pass
         finally:
@@ -2104,7 +2164,12 @@ class BrowserScreen(Screen):
         # Initial queue: 10 suggestions. Afterwards every queue advance
         # appends ONE more at the end, keeping the Up Next list growing.
         limit = 1 if self._autoplay_batch else 10
-        skip_ids = {ep.data.get("video_id") for ep in self._autoplay_batch if (ep.data or {}).get("video_id")}
+        # Never re-queue the currently playing / queued tracks (the watch
+        # playlist leads with the current video, which would repeat it).
+        playing_vids = {(ep.data or {}).get("video_id")
+                        for ep, _ in getattr(self._player, "_tracks", [])}
+        skip_ids = ({ep.data.get("video_id") for ep in self._autoplay_batch
+                     if (ep.data or {}).get("video_id")} | playing_vids)
         try:
             try:
                 self._playback_overlay_log(f"Autoplay: fetching Up Next for {vid[:10]}…")
@@ -2168,6 +2233,23 @@ class BrowserScreen(Screen):
                 ok += 1
         return ok
 
+    def _amv_parts(self, title: str):
+        """Split an AMV title into (character, song). Titles like
+        'Mikasa - Wanna Be Yours [EDIT]' or 'Mikasa | Wanna Be Yours Edit'.
+        Returns None when the structure isn't a clean character - song pair."""
+        import re as _re
+        t = _re.split(r"[\[\()]", title)[0]
+        t = _re.sub(r"\|.*$", "", t).strip()
+        for sep in (" - ", " \u2013 ", " \u2014 "):
+            if sep in t:
+                c, s = t.split(sep, 1)
+                c = c.strip().strip("'\"")
+                s = s.strip()
+                s = _re.sub(r"\b(edit|amv|amvs?|mv|music video)\b.*$", "", s, flags=_re.I).strip()
+                if c and s and 1 <= len(c.split()) <= 5 and 1 <= len(s.split()) <= 8:
+                    return c, s
+        return None
+
     def _fetch_youtube_suggestions(self, title: str, limit: int = 10, skip_ids=None) -> list:
         """Up Next for YouTube via a yt-dlp search on the video title,
         resolved to probed direct streams."""
@@ -2177,36 +2259,70 @@ class BrowserScreen(Screen):
         from anime_watch.providers import CONFIGURED_PROVIDERS
         out = []
         prov = CONFIGURED_PROVIDERS.get("youtube")
+        # Mechanism 1 (default): search the whole title.
+        # Mechanism 2 (yt_autoplay_split): break the title into character x
+        # song and search the cross-product — same character/other songs and
+        # other characters/same song.
+        queries = [f"ytsearch{max(limit, 10)}:{title}"]
         try:
-            r = _sp.run(
-                ["yt-dlp", "--flat-playlist", "--no-warnings", "-J", f"ytsearch10:{title}"],
-                capture_output=True, text=True, timeout=30,
-            )
-            if r.returncode != 0:
-                return out
-            data = _json.loads(r.stdout)
-            candidates = []
-            for e in data.get("entries", []) or []:
-                vid = e.get("id")
-                if not vid or vid in self._played_vids or (skip_ids and vid in skip_ids):
-                    continue
-                t = e.get("title", "") or ""
-                if not t:
-                    continue
-                ch = e.get("channel") or e.get("uploader") or ""
-                label = f"{t} — {ch}" if ch else t
-                candidates.append(Episode(
-                    title=label,
-                    url=f"https://www.youtube.com/watch?v={vid}",
-                    number="1",
-                    site_name="YouTube",
-                    anime_name=t,
-                    data={"video_id": vid, "title": t, "channel": ch},
-                ))
-            return candidates[:limit]
+            from anime_watch.tui.player import load_settings
+            parts = self._amv_parts(title) if load_settings().get("yt_autoplay_split", False) else None
+            if parts:
+                c, s = parts
+                queries = [f"ytsearch4:{c} edit amv",
+                           f"ytsearch4:{s} edit amv",
+                           f"ytsearch4:{title}"]
         except Exception:
             pass
-        return []
+        try:
+            candidates = []
+            seen = set()
+            seen_titles = set()
+            for q in queries:
+                r = _sp.run(
+                    ["yt-dlp", "--flat-playlist", "--no-warnings", "-J", q],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if r.returncode != 0:
+                    continue
+                data = _json.loads(r.stdout)
+                for e in data.get("entries", []) or []:
+                    vid = e.get("id")
+                    # ytsearch can list the same video twice in one response,
+                    # and _played_vids is never populated in the episodes-only
+                    # flow — dedupe within the response as well.
+                    if (not vid or vid in seen or vid in self._played_vids
+                            or (skip_ids and vid in skip_ids)):
+                        continue
+                    seen.add(vid)
+                    t = e.get("title", "") or ""
+                    if not t:
+                        continue
+                    ch = e.get("channel") or e.get("uploader") or ""
+                    label = f"{t} — {ch}" if ch else t
+                    # Exact normalized-title dupes (same title, different
+                    # channel re-uploads) are the same content — skip them.
+                    # Titles like "Trailer" vs "Trailer 2" differ and stay.
+                    import re as _re
+                    nt = _re.sub(r"[^a-z0-9]+", " ", t.lower()).strip()
+                    if nt in seen_titles:
+                        continue
+                    seen_titles.add(nt)
+                    candidates.append(Episode(
+                        title=label,
+                        url=f"https://www.youtube.com/watch?v={vid}",
+                        number="1",
+                        site_name="YouTube",
+                        anime_name=t,
+                        data={"video_id": vid, "title": t, "channel": ch},
+                    ))
+                    if len(candidates) >= limit:
+                        break
+                if len(candidates) >= limit:
+                    break
+        except Exception:
+            pass
+        return candidates[:limit]
 
     def _fetch_suggestions(self, video_id: str, kind: str = "song", limit: int = 10, skip_ids=None) -> list:
         """Up Next via ytmusicapi, resolved to full-quality direct streams.
