@@ -100,6 +100,7 @@ class PlaybackHandler:
         self._mpv_returncode = None
         self._eof_reached = False
         self._prefetch_cb: Optional[Callable] = None
+        self._on_advance_cb: Optional[Callable] = None
         self._prefetching = False
         self._mpv_paused = False
         self._advance_requested = False
@@ -441,6 +442,11 @@ class PlaybackHandler:
             progress=getattr(self, "_mpv_last_pos", 0.0),
             duration=getattr(self, "_mpv_last_dur", 0.0),
         )
+        # Music/YouTube playback is ephemeral — don't pollute watch history.
+        if getattr(episode, "site_name", "") in ("ytmusic", "YouTube"):
+            self._update_content(f"Done: {episode.title[:40]}")
+            self._update_footer()
+            return
         add_history_entry(entry)
         self._update_content(f"Done: {episode.title[:40]}")
         self._update_footer()
@@ -455,7 +461,7 @@ class PlaybackHandler:
         else:
             tracks = None
             ep0 = episode
-        is_music = getattr(ep0, "site_name", "") == "ytmusic"
+        is_music = getattr(ep0, "site_name", "") in ("ytmusic", "YouTube")
         if tracks is not None and is_music:
             await self._do_play_music(tracks, overlay, prefetch_cb=prefetch_cb)
         else:
@@ -486,9 +492,9 @@ class PlaybackHandler:
         self._overlay = overlay
         first_ep = tracks[0][0]
         self._update_content(f"Now playing: {first_ep.title}\nClose mpv to return...")
-        args = ["mpv", "--no-terminal", "--osd-level=1", "--hwdec=no",
+        args = ["mpv", "--no-terminal", "--osd-level=1", "--hwdec=auto",
                 "--vo=gpu", "--ontop", "--cache=yes", "--cache-secs=30",
-                "--cache-pause-initial=no", "--keep-open=yes",
+                "--cache-pause-initial=yes", "--keep-open=yes",
                 f"--volume={getattr(self.app, 'volume', 100)}"]
         ipc_path = f"/tmp/aw-mpv-{os.getpid()}.sock"
         args.append(f"--input-ipc-server={ipc_path}")
@@ -621,6 +627,8 @@ class PlaybackHandler:
         ep = self._current_episode
         if ep is None or self._cur_idx == self._hist_written_for:
             return
+        if getattr(ep, "site_name", "") in ("ytmusic", "YouTube"):
+            return
         self._hist_written_for = self._cur_idx
         entry = HistoryEntry(
             anime_name=ep.anime_name,
@@ -659,10 +667,17 @@ class PlaybackHandler:
             elif prop == "duration" and isinstance(data, (int, float)):
                 self._mpv_last_dur = float(data)
             elif prop == "playlist-pos" and isinstance(data, int) and data >= 0:
+                advanced = data != self._cur_idx
                 self._write_history()
                 self._cur_idx = data
                 if 0 <= data < len(self._tracks):
                     self._current_episode = self._tracks[data][0]
+                if (advanced and data > 0 and self._on_advance_cb
+                        and self._current_episode is not None):
+                    try:
+                        self._on_advance_cb(self._current_episode)
+                    except Exception:
+                        pass
                 self._maybe_prefetch()
             elif prop == "eof-reached" and data is True:
                 # With --keep-open=yes mpv stays alive at the end, so this

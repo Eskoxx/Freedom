@@ -8,6 +8,7 @@ from textual.binding import Binding
 from textual import events
 from anime_watch.models import SearchResult, Episode, SearchResultGroup, TorrentResult
 from anime_watch.providers import ANIME_SITES, MOVIE_SITES, TORRENT_SITES, CONFIGURED_PROVIDERS
+import anime_watch.providers as _providers_mod
 
 C = {
     "accent": "#a78bfa",
@@ -47,7 +48,7 @@ class LogoWidget(Static):
             Text("\n"),
             Text("█▀  █▀▄ ██▄ ██▄ █▄▀ █▄█ █▀█", SA_B),
             Text("\n\n"),
-            Text("A CLI anime streamer for terminal people.", SD),
+            Text("A CLI media streamer for terminal people.", SD),
         )
 
 class RuleWidget(Static):
@@ -537,16 +538,28 @@ class ResultsPanel(BaseListPanel):
                 elif alive is False:
                     name_style = Style(color=C["bad"])
                 name = Text(f"{item.title[:w-nw-14]}", style=name_style, no_wrap=True)
-                if alive is True:
-                    sc = Style(color=C["good"], dim=True)
-                elif alive is False:
-                    sc = Style(color=C["bad"], dim=True)
-                elif item.site_name.lower() in CONFIGURED_PROVIDERS:
-                    sc = SG
+                # Hide the site column when the visible results come from a
+                # single provider (targeted search, or a category with one
+                # provider — regardless of which category that is).
+                single_provider = len({
+                    r.site_name.lower().strip()
+                    for r in self._items
+                    if isinstance(r, SearchResult)
+                }) <= 1
+                if _providers_mod._TARGET_PROVIDER or single_provider:
+                    # Single-provider search: the provider name is redundant.
+                    rows.append(Text.assemble(Text(mark), num, Text(" "), name))
                 else:
-                    sc = SD
-                site = Text(f" {item.site_name[:8]:>8}", style=sc)
-                rows.append(Text.assemble(Text(mark), num, Text(" "), name, site))
+                    if alive is True:
+                        sc = Style(color=C["good"], dim=True)
+                    elif alive is False:
+                        sc = Style(color=C["bad"], dim=True)
+                    elif item.site_name.lower() in CONFIGURED_PROVIDERS:
+                        sc = SG
+                    else:
+                        sc = SD
+                    site = Text(f" {item.site_name[:8]:>8}", style=sc)
+                    rows.append(Text.assemble(Text(mark), num, Text(" "), name, site))
             elif isinstance(item, SearchResultGroup):
                 if sel:
                     name_style = SA_B
