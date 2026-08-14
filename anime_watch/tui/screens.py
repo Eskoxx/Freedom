@@ -2076,6 +2076,7 @@ class BrowserScreen(Screen):
                     # Keep unresolved entries queued — only consume what plays.
                     self._autoplay_batch = [ep for ep in batch
                                             if (ep.data or {}).get("video_id") not in resolved_vids]
+                    self._played_vids |= resolved_vids
                     self._playback_gen += 1
                     self._launch_mpv_tracks(rel_tracks, overlay, self._playback_gen)
                     return
@@ -2145,7 +2146,14 @@ class BrowserScreen(Screen):
         self._playback_gen += 1
         rest = [(ep, self._autoplay_streams.get((ep.data or {}).get("video_id"))) for ep in batch]
         rest = [t for t in rest if t[1] and t[1].url]
-        self._launch_mpv_tracks([(selected, stream)] + rest, overlay, self._playback_gen)
+        play_tracks = [(selected, stream)] + rest
+        # These are now queued in the player — remove them from the batch so
+        # the end-of-list relaunch doesn't restart them from the beginning.
+        played_vids = {(ep.data or {}).get("video_id") for ep, _ in play_tracks}
+        self._autoplay_batch = [ep for ep in batch
+                                if (ep.data or {}).get("video_id") not in played_vids]
+        self._played_vids |= played_vids
+        self._launch_mpv_tracks(play_tracks, overlay, self._playback_gen)
 
     async def _prefetch_next_batch(self, episode):
         """Called by the player near the end of the playlist: fetch the next
