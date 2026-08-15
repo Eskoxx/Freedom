@@ -1379,6 +1379,8 @@ class BrowserScreen(Screen):
         self._queue: list = []
         self._playback_overlay = None
         self._autoplay_batch: list = []
+        self._autoplay_streams: dict = {}
+        self._autoplay_resolving = False
         self._autoplay_fetched_for = ""
         self._autoplay_fetching = False
         self._played_vids: set = set()
