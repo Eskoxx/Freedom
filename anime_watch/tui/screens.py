@@ -10,7 +10,8 @@ from textual.binding import Binding
 
 from anime_watch.models import SearchResultGroup, TorrentResult
 from anime_watch.providers import ANIME_PROVIDERS, CONFIGURED_PROVIDERS, CONFIGURED_SITES, MOVIE_PROVIDERS, TORRENT_PROVIDERS, search_configured, get_episodes
-from anime_watch.tui.widgets import LogoWidget, RuleWidget, SidebarWidget, ResultsPanel, DownloadsPanel, HistoryPanel, FooterHints, C, SD, SA, SA_B, ST, SG, SW, ICO
+from anime_watch.tui import widgets as _w
+from anime_watch.tui.widgets import LogoWidget, RuleWidget, SidebarWidget, ResultsPanel, DownloadsPanel, HistoryPanel, FooterHints
 from anime_watch.history import HistoryEntry, add_entry as add_history_entry, get_continue_watching, get_history
 from anime_watch.tui.player import PlaybackHandler
 from anime_watch.tui.downloader import DownloadHandler
@@ -85,6 +86,8 @@ class SplashScreen(Screen):
                     yield Static("  ·  ", classes="hint-text")
                     yield Button("dev?", id="splash-community-btn", classes="hint-btn")
                     yield Static("  ·  ", classes="hint-text")
+                    yield Button("theme", id="splash-theme-btn", classes="hint-btn")
+                    yield Static("  ·  ", classes="hint-text")
                     yield Static("^c", classes="hint-key")
                     yield Static(" quit", classes="hint-text")
                 yield Static("", classes="spacer-sm")
@@ -94,6 +97,15 @@ class SplashScreen(Screen):
         self._set_category(self.app.search_category)
         self.query_one("#splash-search", Input).focus()
         self._refresh_continue_watching()
+        self._update_theme_label()
+
+    def _update_theme_label(self):
+        try:
+            from anime_watch.tui.themes import THEMES
+            btn = self.query_one("#splash-theme-btn", Button)
+            btn.label = f"theme: {THEMES.get(self.app._theme_name, {}).get('name', 'Midnight')}"
+        except Exception:
+            pass
 
     def on_screen_resume(self):
         self.query_one("#splash-search", Input).focus()
@@ -163,7 +175,7 @@ class SplashScreen(Screen):
             child.remove()
         if not cw:
             return
-        title = Static(Text(" Continue Watching", style=SA_B))
+        title = Static(" Continue Watching", classes="cw-title")
         box.mount(title)
         for entry in cw:
             pct = entry.progress_pct
@@ -184,6 +196,9 @@ class SplashScreen(Screen):
             self._set_category("torrent")
         elif event.button.id == "splash-cat-music":
             self._set_category("music")
+        elif event.button.id == "splash-theme-btn":
+            self.app.action_cycle_theme()
+            self._update_theme_label()
         elif event.button.id == "splash-sub-anime":
             self._set_category("torrent-anime")
             self.query_one("#splash-search", Input).focus()
@@ -1118,10 +1133,10 @@ class MusicPlayerOverlay(Screen):
         except Exception:
             _mode = ""
         suffix = f"  [{_mode}]" if _mode else ""
-        track.update(Text(f"  {paused} {title}{suffix}", style=SA_B))
+        track.update(Text(f"  {paused} {title}{suffix}", style=_w.SA_B))
         self.query_one("#mp-progress", Static).update(self._fmt_progress())
         vol = getattr(self.app, "volume", 100)
-        self.query_one("#mp-vol", Static).update(Text(f"  Volume: {vol}%", style=SD))
+        self.query_one("#mp-vol", Static).update(Text(f"  Volume: {vol}%", style=_w.SD))
         self.query_one("#mp-pause-btn", Button).label = "⏸" if getattr(player, "_mpv_paused", False) else "⏯"
         self._rebuild_queue()
 
@@ -1542,9 +1557,9 @@ class BrowserScreen(Screen):
         self.status = status_text
         sb = self.query_one("#status-bar", Static)
         if status_text:
-            sb.update(Text(f"  {status_text}", style=SD))
+            sb.update(Text(f"  {status_text}", style=_w.SD))
         else:
-            sb.update(Text("", style=SD))
+            sb.update(Text("", style=_w.SD))
 
     def _get_current_item(self):
         rl = self.query_one("#results-list", ResultsPanel)

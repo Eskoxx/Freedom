@@ -260,14 +260,26 @@ class PlaybackHandler:
     async def _poll_mpv_position(self, reader, poll_interval: float = 5.0):
         self._mpv_last_pos = 0.0
         self._mpv_last_dur = 0.0
+        _rid = 0
         while True:
             try:
                 for prop in ("time-pos", "duration"):
-                    req = json.dumps({"command": ["get_property", prop]}).encode() + b"\n"
+                    _rid += 1
+                    req = json.dumps({
+                        "command": ["get_property", prop],
+                        "request_id": _rid,
+                    }).encode() + b"\n"
                     self._ipc_writer.write(req)
                     await self._ipc_writer.drain()
-                    resp = await asyncio.wait_for(reader.readline(), timeout=2.0)
-                    data = json.loads(resp)
+                    # mpv pushes unsolicited events (audio-reconfig, ...) on
+                    # the same socket — keep reading until the response that
+                    # matches OUR request arrives, so events can't steal reads
+                    # and misalign requests with responses.
+                    while True:
+                        resp = await asyncio.wait_for(reader.readline(), timeout=2.0)
+                        data = json.loads(resp)
+                        if data.get("request_id") == _rid:
+                            break
                     if data.get("error") == "success" and isinstance(data.get("data"), (int, float)):
                         if prop == "time-pos":
                             self._mpv_last_pos = float(data["data"])

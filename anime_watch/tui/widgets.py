@@ -11,16 +11,47 @@ from anime_watch.providers import ANIME_SITES, MOVIE_SITES, TORRENT_SITES, CONFI
 import anime_watch.providers as _providers_mod
 
 C = {
-    "accent": "#a78bfa",
-    "text": "#e9e4f5",
-    "alt": "#b9a7e6",
-    "good": "#86d6a2",
-    "warn": "#f0c560",
-    "bad": "#ee7d92",
-    "bright": "#d8b4fe",
-    "rule": "#6b6577",
-    "bg": "#0d0b14",
+    "accent": "#00ff41",
+    "text": "#ccffcc",
+    "alt": "#00cc33",
+    "good": "#00ff41",
+    "warn": "#ffee58",
+    "bad": "#ff5252",
+    "bright": "#66ff99",
+    "rule": "#2f6b3a",
+    "bg": "#020802",
 }
+
+
+def apply_palette(name: str):
+    """Swap the widget color palette for a theme and rebuild the module-level
+    Rich styles (resolved at call time as module globals, so reassigning the
+    globals re-themes every widget on its next render)."""
+    try:
+        from .themes import THEMES
+    except Exception:
+        return
+    pal = THEMES.get(name)
+    if not pal:
+        return
+    C["accent"] = pal["accent"]
+    C["text"] = pal["text"]
+    C["alt"] = pal["alt"]
+    C["good"] = pal["good"]
+    C["warn"] = pal["warn"]
+    C["bad"] = pal["bad"]
+    C["bright"] = pal["bright"]
+    C["rule"] = pal["muted"]
+    C["bg"] = pal["bg"]
+    g = globals()
+    g["SA"] = Style(color=C["accent"])
+    g["ST"] = Style(color=C["text"])
+    g["SD"] = Style(color=C["rule"])
+    g["SG"] = Style(color=C["good"])
+    g["SW"] = Style(color=C["warn"])
+    g["SB"] = Style(color=C["bad"])
+    g["SA_B"] = Style(color=C["accent"], bold=True)
+    g["ST_B"] = Style(color=C["text"], bold=True)
 
 ICO = {
     "done": "✓",
