@@ -1915,6 +1915,15 @@ class BrowserScreen(Screen):
         self._playback_episodes = episodes or []
         self._playback_idx = current_idx
         self._autoplay_batch = []
+        # Shut down the local HLS proxies of prefetched tracks that never
+        # played — they keep serving in the background otherwise.
+        for _st in self._autoplay_streams.values():
+            _proxy = getattr(_st, 'proxy_server', None)
+            if _proxy:
+                try:
+                    _proxy.shutdown()
+                except Exception:
+                    pass
         self._autoplay_streams = {}
         self._autoplay_resolving = False
         self._autoplay_fetched_for = ""
@@ -2241,6 +2250,14 @@ class BrowserScreen(Screen):
         for ep, stream in results:
             vid = (ep.data or {}).get("video_id")
             if stream and stream.url and vid:
+                prev = self._autoplay_streams.get(vid)
+                if prev is not stream:
+                    _proxy = getattr(prev, 'proxy_server', None) if prev else None
+                    if _proxy:
+                        try:
+                            _proxy.shutdown()
+                        except Exception:
+                            pass
                 self._autoplay_streams[vid] = stream
                 ok += 1
         return ok
