@@ -1907,6 +1907,17 @@ class BrowserScreen(Screen):
         else:
             self.app.call_from_thread(self._update_content, "Could not extract stream for download")
 
+    def _shutdown_autoplay_proxies(self):
+        """Shut down the local HLS proxies of prefetched tracks that never
+        played — they keep serving in the background otherwise."""
+        for _st in self._autoplay_streams.values():
+            _proxy = getattr(_st, 'proxy_server', None)
+            if _proxy:
+                try:
+                    _proxy.shutdown()
+                except Exception:
+                    pass
+
     def _start_playback(self, episode, episodes=None, current_idx=0):
         self._playback_gen += 1
         gen = self._playback_gen
@@ -1917,15 +1928,7 @@ class BrowserScreen(Screen):
         self._playback_episodes = episodes or []
         self._playback_idx = current_idx
         self._autoplay_batch = []
-        # Shut down the local HLS proxies of prefetched tracks that never
-        # played — they keep serving in the background otherwise.
-        for _st in self._autoplay_streams.values():
-            _proxy = getattr(_st, 'proxy_server', None)
-            if _proxy:
-                try:
-                    _proxy.shutdown()
-                except Exception:
-                    pass
+        self._shutdown_autoplay_proxies()
         self._autoplay_streams = {}
         self._autoplay_resolving = False
         self._autoplay_fetched_for = ""
@@ -2048,6 +2051,7 @@ class BrowserScreen(Screen):
                     self._update_content("Playback ended")
                 except Exception:
                     pass
+                self._shutdown_autoplay_proxies()
                 return
             if gen != self._playback_gen:
                 return
@@ -2097,6 +2101,7 @@ class BrowserScreen(Screen):
                 except Exception:
                     pass
                 return
+            self._shutdown_autoplay_proxies()
             try:
                 overlay.show_ended()
             except Exception:
