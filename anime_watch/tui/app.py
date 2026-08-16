@@ -134,14 +134,23 @@ class AnimeWatch(App):
         return base
 
     def on_mount(self):
+        self._force_theme()
+
+    def _force_theme(self):
+        """Apply the active theme everywhere. Called at mount AND after the
+        app is fully booted (on_ready) so any stylesheet built with the wrong
+        variables (older Textual / stale build order) gets corrected."""
         from anime_watch.tui.widgets import apply_palette
         apply_palette(self._theme_name)
-        # The stylesheet is already built with the saved theme (see __init__);
-        # this only re-applies it in case the app instance was reused.
         try:
             self.refresh_css()
         except Exception:
             pass
+        for widget in self.query("*"):
+            try:
+                widget.refresh()
+            except Exception:
+                pass
 
 
     def action_cycle_theme(self):
@@ -171,6 +180,12 @@ class AnimeWatch(App):
             self._cleanup_webtorrent()
 
     def on_ready(self):
+        # Post-boot safety net: re-apply the theme now that every screen and
+        # widget is mounted and laid out.
+        try:
+            self._force_theme()
+        except Exception:
+            pass
         try:
             from anime_watch.updater import pending_update_notice, clear_pending_notice
             notice = pending_update_notice()
