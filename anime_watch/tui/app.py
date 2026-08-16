@@ -109,6 +109,12 @@ class AnimeWatch(App):
     _theme_name = "midnight"
 
     def __init__(self, *args, **kwargs):
+        # Load the persisted theme BEFORE super().__init__: Textual builds the
+        # stylesheet (with CSS variables) inside the parent constructor, so the
+        # theme must be known before it runs — not after.
+        from anime_watch.tui.player import load_settings
+        from anime_watch.tui.themes import DEFAULT_THEME
+        self._theme_name = str(load_settings().get("theme", DEFAULT_THEME))
         super().__init__(*args, **kwargs)
         self.search_query = ""
         self.audio_pref = "sub"
@@ -119,8 +125,6 @@ class AnimeWatch(App):
         self.torrents: dict[str, dict] = {}
         from anime_watch.tui.player import load_settings
         self.volume = int(load_settings().get("volume", 100))
-        from anime_watch.tui.themes import DEFAULT_THEME
-        self._theme_name = str(load_settings().get("theme", DEFAULT_THEME))
 
     def get_css_variables(self) -> dict:
         from anime_watch.tui.themes import THEMES
@@ -132,10 +136,12 @@ class AnimeWatch(App):
     def on_mount(self):
         from anime_watch.tui.widgets import apply_palette
         apply_palette(self._theme_name)
-        # Textual builds the stylesheet in super().__init__() — before the
-        # saved theme is loaded — so the CSS variables default to midnight.
-        # Rebuild them now that _theme_name reflects the persisted theme.
-        self.refresh_css()
+        # The stylesheet is already built with the saved theme (see __init__);
+        # this only re-applies it in case the app instance was reused.
+        try:
+            self.refresh_css()
+        except Exception:
+            pass
 
 
     def action_cycle_theme(self):
