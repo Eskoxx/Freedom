@@ -1675,14 +1675,23 @@ class BrowserScreen(Screen):
             self._update_content(f"Not a number: {raw}")
             return
         rl = self.query_one("#results-list", ResultsPanel)
-        for i, ep in enumerate(rl._items):
+        # The list is paginated into categories (All 1-100, 101-200, ...):
+        # search the FULL list, switch to the right category, then highlight.
+        for ep in rl._all_items:
             try:
-                if int(ep.number) == target:
-                    rl.set_cursor(i)
-                    self._update_content(f"Ep {target} — {ep.title[:50]}")
-                    return
+                if int(ep.number) != target:
+                    continue
             except (ValueError, TypeError):
                 continue
+            if getattr(ep, "category", ""):
+                rl.switch_category(ep.category)
+            try:
+                idx = rl._items.index(ep)
+            except ValueError:
+                idx = 0
+            rl.set_cursor(idx)
+            self._update_content(f"Ep {target} — {ep.title[:50]}")
+            return
         self._update_content(f"Episode {target} not found")
 
     def action_move_up(self):

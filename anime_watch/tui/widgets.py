@@ -182,6 +182,21 @@ class BaseListPanel(Widget):
     def _click_to_item(self, y: int) -> int:
         return y if 0 <= y < len(self._items) else -1
 
+    def _visible_range(self, total: int, height: int, cursor: int, tab_lines: int = 1):
+        # Reserve one row for the "… above" header so the cursor always
+        # lands on a visible row (avail rows + 1 header fit the panel).
+        avail = height - tab_lines - 1
+        if avail <= 0:
+            return (0, 0)
+        if total <= avail:
+            return (0, total)
+        half = avail // 2
+        start = max(0, cursor - half)
+        end = min(total, start + avail)
+        if end - start < avail:
+            start = max(0, end - avail)
+        return (start, end)
+
     def on_click(self, event: events.Click):
         idx = self._click_to_item(event.y)
         if idx >= 0:
@@ -209,6 +224,19 @@ class BaseListPanel(Widget):
 
     class Activated(Message):
         pass
+
+    def set_cursor(self, index: int):
+        if self._items:
+            self.cursor = max(0, min(index, len(self._items) - 1))
+
+    def _item_y(self, idx: int) -> int:
+        total = len(self._items)
+        if total == 0:
+            return -1
+        start, end = self._visible_range(total, self.size.height, self.cursor, 0)
+        if idx < start or idx >= end:
+            return -1
+        return (1 if start > 0 else 0) + (idx - start)
 
     def move_up(self):
         if self._items and self.cursor > 0:
@@ -448,7 +476,9 @@ class ResultsPanel(BaseListPanel):
         return len(self._categories)
 
     def _visible_range(self, total: int, height: int, cursor: int, tab_lines: int = 1):
-        avail = height - tab_lines
+        # Reserve one row for the "… above" header so the cursor always
+        # lands on a visible row (avail rows + 1 header fit the panel).
+        avail = height - tab_lines - 1
         if avail <= 0:
             return (0, 0)
         if total <= avail:
@@ -660,6 +690,15 @@ class ResultsPanel(BaseListPanel):
         if self._items:
             self.cursor = max(0, min(index, len(self._items) - 1))
 
+    def _item_y(self, idx: int) -> int:
+        total = len(self._items)
+        if total == 0:
+            return -1
+        start, end = self._visible_range(total, self.size.height, self.cursor, 0)
+        if idx < start or idx >= end:
+            return -1
+        return (1 if start > 0 else 0) + (idx - start)
+
 class HistoryPanel(BaseListPanel):
     def __init__(self, *, id="history-list"):
         super().__init__(id=id)
@@ -672,7 +711,13 @@ class HistoryPanel(BaseListPanel):
         if not self._items:
             lines.append(Text("  (no history)", style=SD))
             return Text("\n").join(lines)
-        for i, entry in enumerate(self._items):
+        total = len(self._items)
+        h = self.size.height
+        start, end = self._visible_range(total, h, self.cursor, 0)
+        if start > 0:
+            lines.append(Text(f"  … ↑ {start} above", style=SD))
+        for i in range(start, end):
+            entry = self._items[i]
             sel = i == self.cursor
             hov = i == self._hover_idx and not sel
             mark = f"{ICO['pointer']} " if sel else "  "

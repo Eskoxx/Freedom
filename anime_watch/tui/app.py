@@ -85,6 +85,7 @@ Screen { background: $bg; }
 .mp-list:focus { background: $bg_focus; }
 .mp-list ListItem { width: 100%; color: $log; }
 .mp-list ListItem:focus { background: $item_focus; color: $track; text-style: bold; }
+.mp-list ListItem.-highlight { background: $item_focus; color: $track; text-style: bold; }
 .mp-hints { width: 100%; color: $muted; margin-top: 1; text-align: center; }
 
 #status-bar { height: 1; width: 1fr; }
