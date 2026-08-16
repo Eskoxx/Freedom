@@ -457,11 +457,6 @@ class PlaybackHandler:
             progress=getattr(self, "_mpv_last_pos", 0.0),
             duration=getattr(self, "_mpv_last_dur", 0.0),
         )
-        # Music/YouTube playback is ephemeral — don't pollute watch history.
-        if getattr(episode, "site_name", "") in ("ytmusic", "YouTube"):
-            self._update_content(f"Done: {episode.title[:40]}")
-            self._update_footer()
-            return
         add_history_entry(entry)
         self._update_content(f"Done: {episode.title[:40]}")
         self._update_footer()
@@ -643,8 +638,6 @@ class PlaybackHandler:
     def _write_history(self):
         ep = self._current_episode
         if ep is None or self._cur_idx == self._hist_written_for:
-            return
-        if getattr(ep, "site_name", "") in ("ytmusic", "YouTube"):
             return
         self._hist_written_for = self._cur_idx
         entry = HistoryEntry(

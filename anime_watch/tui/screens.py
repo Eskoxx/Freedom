@@ -1277,6 +1277,8 @@ class HistoryScreen(Screen):
         Binding("down", "move_down", "", priority=True),
         Binding("k", "move_up", ""),
         Binding("j", "move_down", ""),
+        Binding("left", "prev_cat", "Tab"),
+        Binding("right", "next_cat", "Tab"),
         Binding("enter", "activate", ""),
     ]
 
@@ -1304,8 +1306,8 @@ class HistoryScreen(Screen):
         footer = self.query_one("#footer", FooterHints)
         if entries and len(entries) > 0:
             footer.set_hints([
-                ("↑↓", "Navigate"), ("↵", "Continue"), ("esc", "Back"),
-                ("q", "Quit"),
+                ("↑↓", "Navigate"), ("←→", "Tab"), ("↵", "Continue"),
+                ("esc", "Back"), ("q", "Quit"),
             ])
         else:
             footer.set_hints([
@@ -1326,6 +1328,12 @@ class HistoryScreen(Screen):
 
     def action_move_down(self):
         self.query_one("#history-list", HistoryPanel).move_down()
+
+    def action_prev_cat(self):
+        self.query_one("#history-list", HistoryPanel).prev_category()
+
+    def action_next_cat(self):
+        self.query_one("#history-list", HistoryPanel).next_category()
 
     def action_activate(self):
         panel = self.query_one("#history-list", HistoryPanel)

@@ -90,7 +90,8 @@ def get_history(limit: int = 100) -> list[HistoryEntry]:
 def get_continue_watching(limit: int = 5) -> list[HistoryEntry]:
     entries = load_history()
     candidates = [e for e in entries
-                  if e.duration > 0 and not e.is_finished]
+                  if e.duration > 0 and not e.is_finished
+                  and (e.site_name or "").lower() not in ("ytmusic", "youtube")]
     seen = set()
     deduped = []
     for e in candidates:

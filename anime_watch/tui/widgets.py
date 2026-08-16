@@ -239,12 +239,20 @@ class BaseListPanel(Widget):
         return (1 if start > 0 else 0) + (idx - start)
 
     def move_up(self):
-        if self._items and self.cursor > 0:
+        if not self._items:
+            return
+        if self.cursor > 0:
             self.cursor -= 1
+        else:
+            self.cursor = len(self._items) - 1  # wrap to last
 
     def move_down(self):
-        if self._items and self.cursor < len(self._items) - 1:
+        if not self._items:
+            return
+        if self.cursor < len(self._items) - 1:
             self.cursor += 1
+        else:
+            self.cursor = 0  # wrap to first
 
 
 class DownloadsPanel(BaseListPanel):
@@ -435,21 +443,26 @@ class ResultsPanel(BaseListPanel):
     def category_count(self) -> int:
         return len(self._categories)
 
-    def next_category(self):
+    def _cycle_category(self, step: int):
         group = self._group_categories()
         if not group:
             return
-        idx = group.index(self._active_category)
-        idx = (idx + 1) % len(group)
-        self._switch_category(group[idx])
+        cats = self._categories
+        if len(group) > 1:
+            # Multi-page bases ("All (1-100)"…): arrows page through the base.
+            idx = group.index(self._active_category)
+            self._switch_category(group[(idx + step) % len(group)])
+        else:
+            # Season-style bases ("Season 1", "Season 2", …): each is its own
+            # group — arrows move across the whole category list.
+            idx = cats.index(self._active_category)
+            self._switch_category(cats[(idx + step) % len(cats)])
+
+    def next_category(self):
+        self._cycle_category(1)
 
     def prev_category(self):
-        group = self._group_categories()
-        if not group:
-            return
-        idx = group.index(self._active_category)
-        idx = (idx - 1) % len(group)
-        self._switch_category(group[idx])
+        self._cycle_category(-1)
 
     def switch_category(self, name: str):
         if name in self._categorized:
@@ -700,20 +713,117 @@ class ResultsPanel(BaseListPanel):
         return (1 if start > 0 else 0) + (idx - start)
 
 class HistoryPanel(BaseListPanel):
+    CATEGORIES = ["All", "Watch", "Music", "YouTube"]
+
     def __init__(self, *, id="history-list"):
         super().__init__(id=id)
+        self._all_items = []
+        self._active_category = "All"
+        self._hit_areas = []
+
+    def set_items(self, items, cursor=0):
+        self._all_items = items
+        self._reindex_items()
+        self.cursor = min(cursor, max(0, len(self._items) - 1)) if self._items else 0
+        self.refresh()
+
+    def _category_of(self, entry) -> str:
+        site = (entry.site_name or "").lower()
+        if site == "ytmusic":
+            return "Music"
+        if site == "youtube":
+            return "YouTube"
+        return "Watch"
+
+    def _reindex_items(self):
+        if self._active_category == "All":
+            self._items = list(self._all_items)
+        else:
+            self._items = [e for e in self._all_items
+                           if self._category_of(e) == self._active_category]
+
+    def switch_category(self, name: str):
+        if name in self.CATEGORIES:
+            self._active_category = name
+            self._reindex_items()
+            self.cursor = 0
+            self.refresh()
+
+    def next_category(self):
+        idx = self.CATEGORIES.index(self._active_category)
+        self.switch_category(self.CATEGORIES[(idx + 1) % len(self.CATEGORIES)])
+
+    def prev_category(self):
+        idx = self.CATEGORIES.index(self._active_category)
+        self.switch_category(self.CATEGORIES[(idx - 1) % len(self.CATEGORIES)])
 
     def render(self):
         from anime_watch.history import HistoryEntry
         from rich.text import Text
         w = self.size.width
         lines = []
+
+        # Category tab bar: < All > [Watch] [Music] [YouTube]
+        focused = self.has_focus
+        group = self.CATEGORIES
+        cat_idx = group.index(self._active_category)
+        total = len(group)
+        other_bases = [b for b in group if b != self._active_category]
+
+        self._hit_areas = []
+        x = 0
+        parts = []
+        arrow_style = SA if focused else ST
+
+        parts.append(Text(" ", style=ST))
+        x += 1
+
+        if total > 1:
+            parts.append(Text("<", style=arrow_style))
+            self._hit_areas.append((x, x + 1, "prev"))
+        else:
+            parts.append(Text(" ", style=SD))
+        x += 1
+
+        parts.append(Text(" ", style=ST))
+        x += 1
+
+        label = self._active_category
+        page_str = f" Page {cat_idx+1}/{total}"
+        parts.append(Text(label, style=SA_B if focused else SA))
+        parts.append(Text(page_str, style=SD))
+        x += len(label) + len(page_str)
+
+        parts.append(Text(" ", style=ST))
+        x += 1
+
+        if total > 1:
+            parts.append(Text(">", style=arrow_style))
+            self._hit_areas.append((x, x + 1, "next"))
+        else:
+            parts.append(Text(" ", style=SD))
+        x += 1
+
+        if other_bases:
+            parts.append(Text("   ", style=ST))
+            x += 3
+
+            for base in other_bases:
+                tab = Text(f"[{base}]", style=SD)
+                parts.append(tab)
+                self._hit_areas.append((x, x + len(base) + 2, base))
+                x += len(base) + 2
+
+        lines.append(Text.assemble(*parts))
+        lines.append(Text(""))
+        tab_lines = 2
+
         if not self._items:
             lines.append(Text("  (no history)", style=SD))
             return Text("\n").join(lines)
         total = len(self._items)
         h = self.size.height
-        start, end = self._visible_range(total, h, self.cursor, 0)
+        start, end = self._visible_range(total, h, self.cursor, tab_lines)
         if start > 0:
             lines.append(Text(f"  … ↑ {start} above", style=SD))
         for i in range(start, end):
@@ -740,6 +850,19 @@ class HistoryPanel(BaseListPanel):
                 Text(f" {pct:.0f}%", style=SD),
             ))
         return Text("\n").join(lines)
+
+    def on_click(self, event: events.Click):
+        for x0, x1, action in self._hit_areas:
+            if x0 <= event.x < x1:
+                if action == "prev":
+                    self.prev_category()
+                elif action == "next":
+                    self.next_category()
+                else:
+                    self.switch_category(action)
+                self.focus()
+                return
+        super().on_click(event)
 
 
 class FooterHints(Widget):
