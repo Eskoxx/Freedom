@@ -46,7 +46,9 @@ def fetch_episodes_generic(anime_url: str, site_name: str) -> list[Episode]:
 
 def extract_with_ytdlp(url: str) -> Optional[StreamSource]:
     try:
-        r = subprocess.run(["yt-dlp", "--no-warnings", "--dump-json", "--no-download", "--no-playlist", url], capture_output=True, text=True, timeout=30)
+        r = subprocess.run(["yt-dlp", "--no-warnings", "--dump-json", "--no-download", "--no-playlist",
+                            "--extractor-args", "youtube:player_client=web_embedded", url],
+                           capture_output=True, text=True, timeout=30)
         if r.returncode == 0 and r.stdout.strip():
             data = json.loads(r.stdout.strip().split("\n")[0])
             if data.get("url"):

@@ -2106,8 +2106,12 @@ class BrowserScreen(Screen):
                 # NOTE: must NOT reassign the closure var `tracks` here — that
                 # makes it local to _run and breaks the first _do_play call.
                 def _ready():
-                    return [(ep, self._autoplay_streams.get((ep.data or {}).get("video_id")))
-                            for ep in batch if (self._autoplay_streams.get((ep.data or {}).get("video_id")) or {}).url]
+                    ready = []
+                    for ep in batch:
+                        st = self._autoplay_streams.get((ep.data or {}).get("video_id"))
+                        if st and st.url:
+                            ready.append((ep, st))
+                    return ready
                 await self._resolve_pending()
                 rel_tracks = _ready()
                 # The resolution lottery can come up empty — retry a few
